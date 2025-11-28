@@ -257,11 +257,11 @@ if __name__ == "__main__":
 
     # Get files
     path = os.getcwd()
-    file_UV_Vis_irradiation = os.path.join(path, r'2_files\251008.csv')
-    file_QYDS = os.path.join(path, r'2_files\251007.dat')
+    file_UV_Vis_irradiation = os.path.join(path, r'4_testfiles\240409.csv')
+    file_QYDS = os.path.join(path, r'4_testfiles\240409_CM27.dat')
 
     # Create dataframes
-    df_UV_Vis_irradtiation = produce_UV_Vis_dataframe(file_UV_Vis_irradiation, 153, 0, 28, 'no')
+    df_UV_Vis_irradtiation = produce_UV_Vis_dataframe(file_UV_Vis_irradiation, 803, 4, 58, 'no')
     df_QYDS = producte_QYDS_dataframe(file_QYDS, [], 'no')
     check_if_QYDS_file_and_csv_file_have_same_length(df_QYDS, df_UV_Vis_irradtiation)
     QYDS_irradiation_times_par = df_QYDS['Illum Time'].tolist()
@@ -277,7 +277,7 @@ if __name__ == "__main__":
     power_density_par = calculate_power_density(voltage_after_reference_cuvette_par, 
                                                 correction_factor_par, 
                                                 1, 
-                                                'no')
+                                                'yes')
     photon_flux_par, err_photon_flux_par = calculate_photon_flux(absorbtion_wavelength_par, 
                                                                  voltage_after_reference_cuvette_par, 
                                                                  correction_factor_par, 
@@ -285,6 +285,22 @@ if __name__ == "__main__":
                                                                  0.1, 
                                                                  0.02,
                                                                  'yes')
+    
+    plot_photokinetics_and_fitted_values_first_order(initial_guess=initial_guess_photokinetics_par, 
+                                                     irradiation_times= QYDS_irradiation_times_par,
+                                                     dataframe= df_UV_Vis_irradtiation,
+                                                     absorbances= absorbances_QYDS_par,
+                                                     wavelength=365,
+                                                     palette= 'crest',
+                                                     fontsize_global= 12,
+                                                     fontsize_legend= 6,
+                                                     xmin_1= 300,
+                                                     xmax_1= 600,
+                                                     xmin_2= -5,
+                                                     xmax_2= 610,
+                                                     ymin= 0,
+                                                     ymax=0.3
+                                                     )
 
     # Calculate quantum yields
     calculate_QY(k_par, 
@@ -294,10 +310,10 @@ if __name__ == "__main__":
                  err_photon_flux_par, 
                  err_k_par, 
                  'yes')
-    # calculate_pseudo_total_QY(k_par, 
-    #                           absorbances_QYDS_par, 
-    #                           thickness_cuvette_par, 
-    #                           photon_flux_par, 
-    #                           err_photon_flux_par, 
-    #                           err_k_par, 
-    #                           'yes')
+    calculate_pseudo_total_QY(k_par, 
+                              absorbances_QYDS_par, 
+                              thickness_cuvette_par, 
+                              photon_flux_par, 
+                              err_photon_flux_par, 
+                              err_k_par, 
+                              'yes')
