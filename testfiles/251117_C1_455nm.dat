@@ -1,0 +1,23 @@
+#1 Protocol QYDS measurement
+#2 Date:     	27.11.2025
+#3 Sample:    	AzoAlaNH2 50 uM 3 mL
+#4 Researcher:	Christian
+#5 LED:     	4 VIOSYS CUN6GB1A 365 nm
+#6 Filter::    	OD1 before cuvette
+#7 Solar Cell:	HV-00X
+#8 Voltage after reference cuvette (V):	1.06, High Power range (A)
+#9 Calibration Factor (mW/V):          	3.11
+#10 Power after reference cuvette (mW):	X.XXX
+#11 Insert comments below, do not change the header up to here
+
+
+Number	TimeStart	TimeEnd        	Runtime   	Illum.-Time	Power(mW)	Cell (mW)	Voltage(V)	Current(A)
+0	12:41:00.297	12:41:00.297	0.000   	0.000   	-0.024   	0.000   	0.000   	0.000   
+1	14:42:10.619	14:42:16.125	5.415   	5.415   	-0.023   	0.864   	0.000   	0.000   
+2	14:43:17.213	14:43:22.168	4.992   	10.407   	-0.036   	0.864   	0.000   	0.000   
+3	14:43:57.504	14:44:17.426	19.949   	30.356   	-0.122   	0.867   	0.000   	0.000   
+4	14:44:57.826	14:45:27.767	29.891   	60.247   	-0.086   	0.876   	0.000   	0.000   
+5	14:46:07.291	14:47:07.282	60.070   	120.317   	-0.027   	0.898   	0.000   	0.000   
+6	14:47:42.287	14:49:43.268	120.834   	241.151   	0.017   	0.913   	0.000   	0.000   
+7	14:50:33.672	14:52:33.223	119.388   	360.539   	0.043   	0.912   	0.000   	0.000   
+	
