@@ -9,7 +9,11 @@ from scipy import constants
 import sympy as sp
 mpl.rcParams['mathtext.default'] = 'regular'
 
-def produce_UV_Vis_dataframe(file, last_row_with_data, first_column_with_data, last_column_with_data, print_option):
+def produce_UV_Vis_dataframe(file, 
+                             last_row_with_data, 
+                             first_column_with_data, 
+                             last_column_with_data, 
+                             print_option=False):
 
     df = pd.read_csv(file)
 
@@ -25,12 +29,14 @@ def produce_UV_Vis_dataframe(file, last_row_with_data, first_column_with_data, l
     df = df.drop(columns=df.columns[columns_to_delete])
     df = df.astype(float)
 
-    if print_option == 'yes':
+    if print_option:
         print(df)
 
     return df
 
-def producte_QYDS_dataframe(file, rows_to_delete_indices_list, print_option):
+def producte_QYDS_dataframe(file, 
+                            rows_to_delete_indices_list=[], 
+                            print_option=False):
     data = {'Runtime': [], 'Illum Time': [], 'Cell Value': []}
 
     with open(file, 'r') as file:
@@ -52,7 +58,7 @@ def producte_QYDS_dataframe(file, rows_to_delete_indices_list, print_option):
     df = df.drop(rows_to_delete_indices_list)
     df = df.astype(float)
 
-    if print_option == 'yes':
+    if print_option:
         print(df)
     
     return df
@@ -62,14 +68,18 @@ def check_if_QYDS_file_and_csv_file_have_same_length(QYDS_dataframe, UV_Vis_data
     if len(QYDS_dataframe) != len(UV_Vis_dataframe.columns) - 1:
         print('QYDS dataframe and irradiation times have not the same length!')
 
-def calculate_power_density(voltage_after_reference_cuvette, correction_factor, area_in_square_cm, print_option):
+def calculate_photon_flux(params):
     
-    power_density = voltage_after_reference_cuvette * correction_factor / area_in_square_cm * 10 # W m-2
+    wavelength = params['Irradiation wavelength']
+    voltage_after_reference = params['Voltage after ref']
+    correction_factor = params['Conversion factor']
+    volume = params['Volume']
 
-    if print_option == 'yes':
-        print('Power density = {:.5f} W m-2'.format(power_density))
+    photon_flux = wavelength * voltage_after_reference * correction_factor / (constants.Planck * constants.speed_of_light * constants.Avogadro * volume) * 1E-12
 
-    return power_density
+    print(r'Photon flux = {:.2e} mol s⁻¹ L⁻¹'.format(photon_flux))
+
+    return photon_flux
 
 def plot_photokinetics(irradiation_times, palette, dataframe, xmin, xmax, ymin, ymax, fontsize_legend):
 
@@ -214,17 +224,7 @@ def plot_photokinetics_and_fitted_values_first_order(initial_guess, irradiation_
     plt.tight_layout()
     plt.show()
 
-def calculate_photon_flux(wavelength, voltage_after_reference, correction_factor, volume, voltage_error, length_error, print_option):
 
-    photon_flux = wavelength * voltage_after_reference * correction_factor / (constants.Planck * constants.speed_of_light * constants.Avogadro * volume) * 1E-12
-    power_error = voltage_error * correction_factor * 1E-3
-    volume_error = 0.1 * 0.1 * length_error
-    err_photon_flux = np.sqrt( ( wavelength*1E-9 / ( constants.Planck*constants.speed_of_light*constants.Avogadro*volume ) * power_error )**2 + ( - wavelength*1E-9 * voltage_after_reference*correction_factor*1E-3 / ( constants.Planck*constants.speed_of_light*constants.Avogadro*volume**2 ) * volume_error )**2 )
-
-    if print_option == 'yes':
-        print('Photon flux = {} ± {} mol / s / L'.format(photon_flux, err_photon_flux))
-
-    return photon_flux, err_photon_flux
 
 def calculate_QY(k_fit, absorbances, c_0, photon_flux, err_photon_flux, err_k, print_option):
 
@@ -244,63 +244,109 @@ def calculate_pseudo_total_QY(k_fit, absorbances, thickness_cuvette, photon_flux
     if print_option == 'yes':
         print('pseudo total QY = {:e} ± {:e} L/mol/cm'.format(Q, err_Q))
 
+def get_parameters(testing = False):
+
+    if testing:
+
+        # Get Files
+        path = os.getcwd()
+        file_UV_Vis = os.path.join(path, r"E:\01_Raw\01_Azobenzene\UV_Vis\251127\251127_AzoAlaNH2_cycling_365_455_645nm.csv")
+        file_QYDS = os.path.join(path, r"E:\01_Raw\01_Azobenzene\UV_Vis\251127\251117_C1_365nm.dat")
+
+        # Measurement parameters
+        volume = 3 # mL
+        conc_initial = 50E-6 # M
+        irradiation_wavelength = 365 # nm
+        conversion_factor = 0.2315 # mW / V
+        voltage_after_ref = 3.29 # V
+        kinetics_wavelength = 365 # nm
+        kinetics_p0 = [0,0,0]
+
+        # Dataframe parameters
+        UV_Vis_last_row = 603
+        UV_Vis_first_column = 0
+        UV_Vis_last_column = 24
+
+        return {
+            'UV Vis file' : file_UV_Vis,
+            'QYDS file' : file_QYDS,
+            'Volume' : volume,
+            'Concentration' : conc_initial,
+            'Irradiation wavelength' : irradiation_wavelength,
+            'Conversion factor' : conversion_factor,
+            'Voltage after ref' : voltage_after_ref,
+            'Kinetics wavelength' : kinetics_wavelength,
+            'Initial guess kinetics' : kinetics_p0,
+            'UV Vis last row' : UV_Vis_last_row,
+            'UV Vis first col' : UV_Vis_first_column,
+            'UV Vis last col' : UV_Vis_last_column,
+        }
+
+
+
+def main(testing=False):
+
+    # Get Parameters
+    params = get_parameters(testing=testing)
+    
+    # Create Dataframes
+    df_UV_Vis = produce_UV_Vis_dataframe(file=params['UV Vis file'],
+                                         last_row_with_data=params['UV Vis last row'],
+                                         first_column_with_data=params['UV Vis first col'],
+                                         last_column_with_data=params['UV Vis last col'],
+                                         print_option=False)
+    df_QYDS = producte_QYDS_dataframe(file=params['QYDS file'],
+                                      rows_to_delete_indices_list=[],
+                                      print_option=False)
+    check_if_QYDS_file_and_csv_file_have_same_length(QYDS_dataframe=df_QYDS,
+                                                     UV_Vis_dataframe=df_UV_Vis)
+    
+    calculate_photon_flux(params=params)
+
 if __name__ == "__main__":
 
-    # Parameters
-    absorbtion_wavelength_par = 365 # nm
-    correction_factor_par = 0.2315
-    voltage_after_reference_cuvette_par = 3.29
-    thickness_cuvette_par = 1 # cm
-    initial_concentration_par = 50E-6 # mol L-1
-    initial_guess_photokinetics_par = [1, 1, 1]
-    total_volume = 0.003 # L
+    main(testing=True)
 
-    # Get files
-    path = os.getcwd()
-    file_UV_Vis_irradiation = os.path.join(path, r"E:\01_Raw\01_Azobenzene\UV_Vis\251127\251127_AzoAlaNH2_cycling_365_455_645nm.csv")
-    file_QYDS = os.path.join(path, r"E:\01_Raw\01_Azobenzene\UV_Vis\251127\251117_C1_365nm.dat")
+    # # Create dataframes
+    # df_QYDS = producte_QYDS_dataframe(file_QYDS, [], 'no')
+    # check_if_QYDS_file_and_csv_file_have_same_length(df_QYDS, df_UV_Vis_irradtiation)
+    # QYDS_irradiation_times_par = df_QYDS['Illum Time'].tolist()
 
-    # Create dataframes
-    df_UV_Vis_irradtiation = produce_UV_Vis_dataframe(file_UV_Vis_irradiation, 603, 0, 24, 'no')
-    df_QYDS = producte_QYDS_dataframe(file_QYDS, [], 'no')
-    check_if_QYDS_file_and_csv_file_have_same_length(df_QYDS, df_UV_Vis_irradtiation)
-    QYDS_irradiation_times_par = df_QYDS['Illum Time'].tolist()
+    # # # Extract absorption
+    # absorbances_QYDS_par = extract_absorption_at_wavelength(df_UV_Vis_irradtiation, absorbtion_wavelength_par)
 
-    # # Extract absorption
-    absorbances_QYDS_par = extract_absorption_at_wavelength(df_UV_Vis_irradtiation, absorbtion_wavelength_par)
-
-    # # Fit dilution series and photokinetics
-    A_inf_par, A_i_par, k_par, err_k_par = fit_absorbance_vs_time_first_order(initial_guess_photokinetics_par, 
-                                                                              absorbances_QYDS_par, 
-                                                                              QYDS_irradiation_times_par, 
-                                                                              'yes')
-    power_density_par = calculate_power_density(voltage_after_reference_cuvette_par, 
-                                                correction_factor_par, 
-                                                1, 
-                                                'yes')
-    photon_flux_par, err_photon_flux_par = calculate_photon_flux(absorbtion_wavelength_par, 
-                                                                 voltage_after_reference_cuvette_par, 
-                                                                 correction_factor_par, 
-                                                                 total_volume, 
-                                                                 0.1, 
-                                                                 0.02,
-                                                                 'yes')
+    # # # Fit dilution series and photokinetics
+    # A_inf_par, A_i_par, k_par, err_k_par = fit_absorbance_vs_time_first_order(initial_guess_photokinetics_par, 
+    #                                                                           absorbances_QYDS_par, 
+    #                                                                           QYDS_irradiation_times_par, 
+    #                                                                           'yes')
+    # power_density_par = calculate_power_density(voltage_after_reference_cuvette_par, 
+    #                                             correction_factor_par, 
+    #                                             1, 
+    #                                             'yes')
+    # photon_flux_par, err_photon_flux_par = calculate_photon_flux(absorbtion_wavelength_par, 
+    #                                                              voltage_after_reference_cuvette_par, 
+    #                                                              correction_factor_par, 
+    #                                                              total_volume, 
+    #                                                              0.1, 
+    #                                                              0.02,
+    #                                                              'yes')
     
-    plot_photokinetics_and_fitted_values_first_order(initial_guess=initial_guess_photokinetics_par, 
-                                                     irradiation_times= QYDS_irradiation_times_par,
-                                                     dataframe= df_UV_Vis_irradtiation,
-                                                     absorbances= absorbances_QYDS_par,
-                                                     wavelength=365,
-                                                     palette= 'crest',
-                                                     fontsize_global= 12,
-                                                     fontsize_legend= 6,
-                                                     xmin_1= 250,
-                                                     xmax_1= 800,
-                                                     xmin_2= -5,
-                                                     xmax_2= 610,
-                                                     ymin= 0,
-                                                     ymax=0.8
-                                                     )
+    # plot_photokinetics_and_fitted_values_first_order(initial_guess=initial_guess_photokinetics_par, 
+    #                                                  irradiation_times= QYDS_irradiation_times_par,
+    #                                                  dataframe= df_UV_Vis_irradtiation,
+    #                                                  absorbances= absorbances_QYDS_par,
+    #                                                  wavelength=365,
+    #                                                  palette= 'crest',
+    #                                                  fontsize_global= 12,
+    #                                                  fontsize_legend= 6,
+    #                                                  xmin_1= 250,
+    #                                                  xmax_1= 800,
+    #                                                  xmin_2= -5,
+    #                                                  xmax_2= 610,
+    #                                                  ymin= 0,
+    #                                                  ymax=0.8
+    #                                                  )
 
     # # Calculate quantum yields
     # calculate_QY(k_par, 
