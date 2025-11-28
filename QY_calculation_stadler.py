@@ -248,20 +248,20 @@ if __name__ == "__main__":
 
     # Parameters
     absorbtion_wavelength_par = 365 # nm
-    correction_factor_par = 0.2465
-    voltage_after_reference_cuvette_par = 8.01
+    correction_factor_par = 0.2315
+    voltage_after_reference_cuvette_par = 3.29
     thickness_cuvette_par = 1 # cm
-    initial_concentration_par = 285.7143E-6 # mol L-1
+    initial_concentration_par = 50E-6 # mol L-1
     initial_guess_photokinetics_par = [1, 1, 1]
     total_volume = 0.003 # L
 
     # Get files
     path = os.getcwd()
-    file_UV_Vis_irradiation = os.path.join(path, r'4_testfiles\240409.csv')
-    file_QYDS = os.path.join(path, r'4_testfiles\240409_CM27.dat')
+    file_UV_Vis_irradiation = os.path.join(path, r"E:\01_Raw\01_Azobenzene\UV_Vis\251127\251127_AzoAlaNH2_cycling_365_455_645nm.csv")
+    file_QYDS = os.path.join(path, r"E:\01_Raw\01_Azobenzene\UV_Vis\251127\251117_C1_365nm.dat")
 
     # Create dataframes
-    df_UV_Vis_irradtiation = produce_UV_Vis_dataframe(file_UV_Vis_irradiation, 803, 4, 58, 'no')
+    df_UV_Vis_irradtiation = produce_UV_Vis_dataframe(file_UV_Vis_irradiation, 603, 0, 24, 'no')
     df_QYDS = producte_QYDS_dataframe(file_QYDS, [], 'no')
     check_if_QYDS_file_and_csv_file_have_same_length(df_QYDS, df_UV_Vis_irradtiation)
     QYDS_irradiation_times_par = df_QYDS['Illum Time'].tolist()
@@ -294,26 +294,26 @@ if __name__ == "__main__":
                                                      palette= 'crest',
                                                      fontsize_global= 12,
                                                      fontsize_legend= 6,
-                                                     xmin_1= 300,
-                                                     xmax_1= 600,
+                                                     xmin_1= 250,
+                                                     xmax_1= 800,
                                                      xmin_2= -5,
                                                      xmax_2= 610,
                                                      ymin= 0,
-                                                     ymax=0.3
+                                                     ymax=0.8
                                                      )
 
-    # Calculate quantum yields
-    calculate_QY(k_par, 
-                 absorbances_QYDS_par, 
-                 initial_concentration_par, 
-                 photon_flux_par, 
-                 err_photon_flux_par, 
-                 err_k_par, 
-                 'yes')
-    calculate_pseudo_total_QY(k_par, 
-                              absorbances_QYDS_par, 
-                              thickness_cuvette_par, 
-                              photon_flux_par, 
-                              err_photon_flux_par, 
-                              err_k_par, 
-                              'yes')
+    # # Calculate quantum yields
+    # calculate_QY(k_par, 
+    #              absorbances_QYDS_par, 
+    #              initial_concentration_par, 
+    #              photon_flux_par, 
+    #              err_photon_flux_par, 
+    #              err_k_par, 
+    #              'yes')
+    # calculate_pseudo_total_QY(k_par, 
+    #                           absorbances_QYDS_par, 
+    #                           thickness_cuvette_par, 
+    #                           photon_flux_par, 
+    #                           err_photon_flux_par, 
+    #                           err_k_par, 
+    #                           'yes')
