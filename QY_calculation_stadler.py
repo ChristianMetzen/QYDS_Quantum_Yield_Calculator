@@ -37,22 +37,29 @@ def produce_UV_Vis_dataframe(file,
 def producte_QYDS_dataframe(file, 
                             rows_to_delete_indices_list=[], 
                             print_option=False):
+
     data = {'Runtime': [], 'Illum Time': [], 'Cell Value': []}
 
-    with open(file, 'r') as file:
-        lines = file.readlines()
+    with open(file, 'r') as f:
+        lines = f.readlines()
 
-        # Extract data from the specified column    
-        for line in lines:
-            if not line.startswith("#"): 
-                line_data = line.split("\t")
-                if len(line_data) >= 7:
-                    try:
-                        data['Runtime'].append(float(line_data[3].replace(",", ".")))
-                        data['Illum Time'].append(float(line_data[4].replace(",", ".")))
-                        data['Cell Value'].append(float(line_data[6].replace(",", ".")))
-                    except ValueError:
-                        print("Error converting to float:", line_data)
+    for line in lines:
+        if line.startswith("#"):
+            continue   # ignore comment lines
+
+        if line.strip().startswith("Number"):
+            continue   # skip header line
+
+        line_data = line.split("\t")
+
+        if len(line_data) >= 7:
+            try:
+                data['Runtime'].append(float(line_data[3].replace(",", ".")))
+                data['Illum Time'].append(float(line_data[4].replace(",", ".")))
+                data['Cell Value'].append(float(line_data[6].replace(",", ".")))
+            except ValueError:
+                # skip empty or malformed lines
+                continue
 
     df = pd.DataFrame(data)
     df = df.drop(rows_to_delete_indices_list)
@@ -60,13 +67,8 @@ def producte_QYDS_dataframe(file,
 
     if print_option:
         print(df)
-    
+
     return df
-
-def check_if_QYDS_file_and_csv_file_have_same_length(QYDS_dataframe, UV_Vis_dataframe):
-
-    if len(QYDS_dataframe) != len(UV_Vis_dataframe.columns) - 1:
-        print('QYDS dataframe and irradiation times have not the same length!')
 
 def calculate_photon_flux(params):
     
@@ -80,6 +82,23 @@ def calculate_photon_flux(params):
     print(r'Photon flux = {:.2e} mol s⁻¹ L⁻¹'.format(photon_flux))
 
     return photon_flux
+
+def extract_absorption_at_wavelength(params):
+
+    # Extract parameters
+    dataframe = params['UV Vis df']
+    wavelength = params['Kinetics wavelength']
+    # Find the row index closest to the specified wavelength
+    closest_row_index = (dataframe.iloc[:, 0] - wavelength).abs().idxmin()
+    
+    # Extract absorption values at the closest row index
+    absorption_values = dataframe.iloc[closest_row_index, 1:].tolist()
+
+    params['Kinetics abs'] = absorption_values
+
+    return params
+
+
 
 def plot_photokinetics(irradiation_times, palette, dataframe, xmin, xmax, ymin, ymax, fontsize_legend):
 
@@ -113,17 +132,13 @@ def plot_photokinetics(irradiation_times, palette, dataframe, xmin, xmax, ymin, 
     plt.legend(fontsize=fontsize_legend)
     plt.show()
 
-def extract_absorption_at_wavelength(dataframe, wavelength):
-    # Find the row index closest to the specified wavelength
-    closest_row_index = (dataframe.iloc[:, 0] - wavelength).abs().idxmin()
-    
-    # Extract absorption values at the closest row index
-    absorption_values = dataframe.iloc[closest_row_index, 1:].tolist()
+def fit_absorbance_vs_time_first_order(params):
 
-
-    return absorption_values
-
-def fit_absorbance_vs_time_first_order(initial_guess, absorbances, time, print_option):
+    # Extract Parameters
+    initial_guess = params['Initial guess kinetics']
+    absorbances = params['Kinetics abs']
+    df_QYDS = params['QYDS df']
+    time = df_QYDS.iloc[:,1]
 
     time = np.array(time)
 
@@ -224,8 +239,6 @@ def plot_photokinetics_and_fitted_values_first_order(initial_guess, irradiation_
     plt.tight_layout()
     plt.show()
 
-
-
 def calculate_QY(k_fit, absorbances, c_0, photon_flux, err_photon_flux, err_k, print_option):
 
     QY = k_fit * c_0 / (photon_flux * (1 - 10**(-absorbances[0])))
@@ -282,8 +295,6 @@ def get_parameters(testing = False):
             'UV Vis last col' : UV_Vis_last_column,
         }
 
-
-
 def main(testing=False):
 
     # Get Parameters
@@ -295,25 +306,44 @@ def main(testing=False):
                                          first_column_with_data=params['UV Vis first col'],
                                          last_column_with_data=params['UV Vis last col'],
                                          print_option=False)
+    params['UV Vis df'] = df_UV_Vis
     df_QYDS = producte_QYDS_dataframe(file=params['QYDS file'],
                                       rows_to_delete_indices_list=[],
                                       print_option=False)
-    check_if_QYDS_file_and_csv_file_have_same_length(QYDS_dataframe=df_QYDS,
-                                                     UV_Vis_dataframe=df_UV_Vis)
+    params['QYDS df'] = df_QYDS
+    if len(df_QYDS) != len(df_UV_Vis.columns) - 1:
+        print('QYDS dataframe and irradiation times have not the same length!')
+        return
+    
+    params = extract_absorption_at_wavelength(params=params)
     
     calculate_photon_flux(params=params)
+
+    params = fit_absorbance_vs_time_first_order(params['Initial guess kinetics'],
+                                                params['Kinetics abs'],
+                                                df_QYDS.iloc[:,1],
+                                                'yes')
+    
+    plot_photokinetics_and_fitted_values_first_order(initial_guess=params['Initial guess kinetics'], 
+                                                irradiation_times= df_QYDS.iloc[:,1],
+                                                dataframe= df_UV_Vis,
+                                                absorbances= params['Kinetics abs'],
+                                                wavelength=365,
+                                                palette= 'crest',
+                                                fontsize_global= 12,
+                                                fontsize_legend= 6,
+                                                xmin_1= 250,
+                                                xmax_1= 800,
+                                                xmin_2= -5,
+                                                xmax_2= 610,
+                                                ymin= 0,
+                                                ymax=0.8
+                                                )
+    
 
 if __name__ == "__main__":
 
     main(testing=True)
-
-    # # Create dataframes
-    # df_QYDS = producte_QYDS_dataframe(file_QYDS, [], 'no')
-    # check_if_QYDS_file_and_csv_file_have_same_length(df_QYDS, df_UV_Vis_irradtiation)
-    # QYDS_irradiation_times_par = df_QYDS['Illum Time'].tolist()
-
-    # # # Extract absorption
-    # absorbances_QYDS_par = extract_absorption_at_wavelength(df_UV_Vis_irradtiation, absorbtion_wavelength_par)
 
     # # # Fit dilution series and photokinetics
     # A_inf_par, A_i_par, k_par, err_k_par = fit_absorbance_vs_time_first_order(initial_guess_photokinetics_par, 
@@ -332,21 +362,7 @@ if __name__ == "__main__":
     #                                                              0.02,
     #                                                              'yes')
     
-    # plot_photokinetics_and_fitted_values_first_order(initial_guess=initial_guess_photokinetics_par, 
-    #                                                  irradiation_times= QYDS_irradiation_times_par,
-    #                                                  dataframe= df_UV_Vis_irradtiation,
-    #                                                  absorbances= absorbances_QYDS_par,
-    #                                                  wavelength=365,
-    #                                                  palette= 'crest',
-    #                                                  fontsize_global= 12,
-    #                                                  fontsize_legend= 6,
-    #                                                  xmin_1= 250,
-    #                                                  xmax_1= 800,
-    #                                                  xmin_2= -5,
-    #                                                  xmax_2= 610,
-    #                                                  ymin= 0,
-    #                                                  ymax=0.8
-    #                                                  )
+
 
     # # Calculate quantum yields
     # calculate_QY(k_par, 
