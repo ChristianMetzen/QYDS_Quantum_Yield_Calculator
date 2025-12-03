@@ -77,6 +77,17 @@ def producte_QYDS_dataframe(file,
 
     return df
 
+def add_runtime_rows(df, start=0, stop=1200, step=9):
+    
+    df = df.iloc[0:0]
+    """Append rows with runtime values and NaN for the other columns."""
+    new_rows = pd.DataFrame({
+        'Runtime': [pd.NA] * ((stop - start) // step + 1),
+        'Illum Time': list(range(start, stop + 1, step)),
+        'Cell Value': [pd.NA] * ((stop - start) // step + 1)
+    })
+    return pd.concat([df, new_rows], ignore_index=True)
+
 def calculate_photon_flux(params, 
                           print_func=print):
     
@@ -111,38 +122,63 @@ def extract_absorption_at_wavelength(params):
 
     return params
 
-def fit_absorbance_vs_time_first_order(params,
-                                       print_func=print):
+def fit_absorbance_vs_time_first_order(params, print_func=print):
 
-    # Extract Parameters
-    initial_guess = params['Initial guess kinetics']
-    absorbances = params['Kinetics abs']
+    initial_guess = params['Initial guess kinetics']        # [A_inf, A_i, k]
+    absorbances = np.asarray(params['Kinetics abs'], dtype=float)
     df_QYDS = params['QYDS df']
-    time = df_QYDS.iloc[:,1]
+    time = np.asarray(df_QYDS.iloc[:, 1], dtype=float)
 
-    time = np.array(time)
-
-    # Define fitting function
     def fitting_function(t, A_inf, A_i, k):
-        return A_inf +  (A_i - A_inf) * np.exp(-k * t)
+        return A_inf + (A_i - A_inf) * np.exp(-np.abs(k) * t) 
 
-    # Perform curve fit
-    fit_parameters, covariance = curve_fit(fitting_function, time, absorbances, p0=initial_guess)
+    # sensible default p0 if user provided zeros or nonsense
+    p0 = list(initial_guess)
+    # try to fill reasonable p0 if zeros:
+    if p0 is None or len(p0) != 3:
+        p0 = [absorbances[-1], absorbances[0], 0.01]
+    else:
+        # if k is zero or negative or extremely small, give a small positive start
+        if p0[2] == 0 or p0[2] is None:
+            p0[2] = 0.01
+        # if user put commas as string, ensure numeric (you already convert in GUI)
+        p0 = [float(p0[0]), float(p0[1]), float(abs(p0[2]))]
 
-    # Calculate standard deviations (errors) of fit parameters from covariance matrix
+    # Bounds: allow A values to be wide, but k must be >= 0
+    # Lower bounds: A_inf and A_i could be negative absorbances in worst case -> set to -np.inf or a reasonable negative
+    lower = [-np.inf, -np.inf, 0.0]
+    upper = [np.inf, np.inf, np.inf]
+
+    # Try the fit, allow more iterations
+    try:
+        fit_parameters, covariance = curve_fit(
+            fitting_function,
+            time,
+            absorbances,
+            p0=p0,
+            bounds=(lower, upper),
+            maxfev=10000
+        )
+    except Exception as e:
+        # Give a helpful error message
+        raise RuntimeError(f"fit failed: {e}")
+
     fit_parameter_errors = np.sqrt(np.diag(covariance))
 
-    # Print fit parameters with errors
-    print_func('A_inf = {:.5f} ± {:.5f}'.format(fit_parameters[0], fit_parameter_errors[0]))
-    print_func('A_i = {:.5f} ± {:.5f}'.format(fit_parameters[1], fit_parameter_errors[1]))
-    print_func('k = {:.5f} ± {:.5f} s⁻¹'.format(fit_parameters[2], fit_parameter_errors[2]))
+    # Print results
+    print_func(f'A_inf = {fit_parameters[0]:.6f} ± {fit_parameter_errors[0]:.6f}')
+    print_func(f'A_i   = {fit_parameters[1]:.6f} ± {fit_parameter_errors[1]:.6f}')
+    print_func(f'k     = {fit_parameters[2]:.6f} ± {fit_parameter_errors[2]:.6f} s⁻¹')
 
+    # Save into params
     params['A_inf'] = fit_parameters[0]
     params['A_inf error'] = fit_parameter_errors[0]
     params['A_i'] = fit_parameters[1]
     params['A_i error'] = fit_parameter_errors[1]
-    params['k'] = fit_parameters[2]
+    params['k'] = abs(fit_parameters[2])   # ensure positive
     params['k error'] = fit_parameter_errors[2]
+    # store whether curve increased or decreased
+    params['kinetics model'] = 'increasing' if params['A_inf'] > params['A_i'] else 'decreasing'
 
     return params
 
@@ -326,6 +362,33 @@ def get_testing_parameters(scenario=1):
         t_min = -10
         t_max = 610
 
+    if scenario == 3:
+    
+        # Get Files
+        path = os.getcwd()
+        file_UV_Vis = os.path.join(path, r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\oNBA_Water_365nm_100mA.csv")
+        file_QYDS = os.path.join(path, r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\oNBA_Water_365nm_100mA.dat")
+
+        # Measurement parameters
+        volume = 2 # mL
+        conc_initial = 54.5E-6 # M
+        irradiation_wavelength = 365 # nm
+        conversion_factor = 4.9 # mW / V
+        # voltage_after_ref = 7.49 # V
+        voltage_after_ref = 2.21 # V
+        kinetics_wavelength = 280 # nm
+        kinetics_p0 = []
+
+        # Plotting parameters
+        palette = 'crest'
+        A_min = 0
+        A_max = 1
+        wl_min = 200
+        wl_max = 500
+        font_legend_spectra = 8
+        t_min = -5
+        t_max = 175
+
     return {
         'UV Vis file' : file_UV_Vis,
         'QYDS file' : file_QYDS,
@@ -358,7 +421,13 @@ def testing_main(scenario=1):
     df_QYDS = producte_QYDS_dataframe(file=params['QYDS file'],
                                       rows_to_delete_indices_list=[],
                                       print_option=False)
+    if scenario == 3:
+        df_QYDS = add_runtime_rows(df=df_QYDS,
+                            start=0,
+                            stop=162,
+                            step=9)
     params['QYDS df'] = df_QYDS
+
     if len(df_QYDS) != len(df_UV_Vis.columns) - 1:
         print(f'QYDS dataframe ({len(df_QYDS)}) and irradiation times ({len(df_UV_Vis.columns)}) have not the same length!')
         return
@@ -586,7 +655,7 @@ def run_gui():
 
     root.mainloop()
 
-def main(testing=True,
+def main(testing=False,
          testing_scenario=1):
     
     if testing:
@@ -596,5 +665,5 @@ def main(testing=True,
 
 if __name__ == "__main__":
 
-    main(testing=False,
-         testing_scenario=1)
+    main(testing=True,
+         testing_scenario=3)
