@@ -291,6 +291,8 @@ def calculate_QY(params,
     c_0 = params['Concentration']
     photon_flux = params['Photon flux per vol']
     A_i_0 = get_initial_absorbance_at_irradiation_wavelength(params=params)
+    I_abs = photon_flux*(1-10**(-A_i_0))
+    print(f'Ai0:{A_i_0}, photon flux per vol: {photon_flux}, I_abs : {I_abs}')
 
     QY = k_fit * c_0 / (photon_flux * (1 - 10**(-A_i_0)))
     
@@ -388,6 +390,58 @@ def get_testing_parameters(scenario=1):
         font_legend_spectra = 8
         t_min = -5
         t_max = 175
+
+    if scenario == 4:
+
+        # Get Files
+        path = os.getcwd()
+        file_UV_Vis = r"testfiles\251204_305nm.csv"
+        file_QYDS =  r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251204_2nd_305nm.dat"
+
+        # Measurement parameters
+        volume = 3 # mL
+        conc_initial = 50E-6 # M
+        irradiation_wavelength = 305 # nm
+        conversion_factor = 0.399 # mW / V
+        voltage_after_ref = 7.12 # V
+        kinetics_wavelength = 540 # nm
+        kinetics_p0 = []
+
+        # Plotting parameters
+        palette = 'viridis'
+        A_min = 0
+        A_max = 0.8
+        wl_min = 250
+        wl_max = 800
+        font_legend_spectra = 10
+        t_min = -5
+        t_max = 500
+    
+    if scenario == 5:
+
+        # Get Files
+        path = os.getcwd()
+        file_UV_Vis = r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251204_521nm.csv"
+        file_QYDS =  r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251204_2nd_305_PSS_521nm.dat"
+
+        # Measurement parameters
+        volume = 3 # mL
+        conc_initial = 50E-6 # M
+        irradiation_wavelength = 521 # nm
+        conversion_factor = 0.130 # mW / V
+        voltage_after_ref = 9.31 # V
+        kinetics_wavelength = 540 # nm
+        kinetics_p0 = []
+
+        # Plotting parameters
+        palette = 'viridis'
+        A_min = -0.01
+        A_max = 0.8
+        wl_min = 250
+        wl_max = 800
+        font_legend_spectra = 10
+        t_min = -5
+        t_max = 605
 
     return {
         'UV Vis file' : file_UV_Vis,
@@ -666,4 +720,4 @@ def main(testing=False,
 if __name__ == "__main__":
 
     main(testing=True,
-         testing_scenario=3)
+         testing_scenario=4)
