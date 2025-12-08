@@ -6,7 +6,6 @@ import seaborn as sns
 import numpy as np
 from scipy.optimize import curve_fit
 from scipy import constants
-import sympy as sp
 mpl.rcParams['mathtext.default'] = 'regular'
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -88,17 +87,50 @@ def add_runtime_rows(df, start=0, stop=1200, step=9):
     })
     return pd.concat([df, new_rows], ignore_index=True)
 
+def get_correction_factor(params):
+    
+    # Extract Parameter
+    wavelength = params['Irradiation wavelength']
+    channel = params['Channel']
+    
+    data = {
+        "wavelength": [
+            260,270,280,290,300,310,320,330,340,350,360,370,380,390,400,
+            410,420,430,440,450,460,470,480,490,500,510,520,530,540,550,
+            560,570,580,590,600,610,620,630,640,650,660
+        ],
+        "high": [
+            10.042,9.892,9.493,8.934,8.301,7.654,7.036,6.467,5.956,5.503,
+            5.105,4.758,4.454,4.189,3.958,3.756,3.578,3.423,3.285,3.164,
+            3.056,2.960,2.874,2.797,2.727,2.663,2.605,2.552,2.502,2.455,
+            2.410,2.367,2.325,2.284,2.244,2.203,2.162,2.121,2.080,2.038,
+            1.995
+        ],
+        "low": [
+            0.502,0.495,0.475,0.447,0.415,0.383,0.352,0.323,0.298,0.275,
+            0.255,0.238,0.223,0.209,0.198,0.188,0.179,0.171,0.164,0.158,
+            0.153,0.148,0.144,0.140,0.136,0.133,0.130,0.128,0.125,0.123,
+            0.120,0.118,0.116,0.114,0.112,0.110,0.108,0.106,0.104,0.102,
+            0.100
+        ]
+    }
+
+    correction_factor = np.interp(wavelength, data['wavelength'], data[channel])
+    
+    return correction_factor
+
 def calculate_photon_flux(params, 
                           print_func=print):
     
     wavelength = params['Irradiation wavelength']
     voltage_after_reference = params['Voltage after ref']
-    correction_factor = params['Conversion factor']
+    correction_factor = get_correction_factor(params=params)
     volume = params['Volume']
 
     photon_flux_per_vol = wavelength * voltage_after_reference * correction_factor / (constants.Planck * constants.speed_of_light * constants.Avogadro * volume) * 1E-9
     photon_flux = photon_flux_per_vol * volume*1E-3
 
+    print_func(f'Conversion factor = {correction_factor:.2f} mW V⁻¹')
     print_func(r'Photon flux = {:.2e} mol s⁻¹ L⁻¹ / {:.2e} mol s⁻¹'.format(photon_flux_per_vol, photon_flux))
 
     params['Photon flux per vol'] = photon_flux_per_vol
@@ -106,11 +138,13 @@ def calculate_photon_flux(params,
 
     return params
 
-def extract_absorption_at_wavelength(params):
+def create_kinetics_df(params):
 
     # Extract parameters
     dataframe = params['UV Vis df']
     wavelength = params['Kinetics wavelength']
+    df_QYDS = params['QYDS df']
+    time = np.asarray(df_QYDS.iloc[:, 1], dtype=float)
 
     # Find the row index closest to the specified wavelength
     closest_row_index = (dataframe.iloc[:, 0] - wavelength).abs().idxmin()
@@ -118,16 +152,22 @@ def extract_absorption_at_wavelength(params):
     # Extract absorption values at the closest row index
     absorption_values = dataframe.iloc[closest_row_index, 1:].tolist()
 
-    params['Kinetics abs'] = absorption_values
+    df_kinetics = pd.DataFrame({
+        'Time / s' : time,
+        'Absorbance' : absorption_values
+    })
+
+
+    params['Kinetics df'] = df_kinetics
 
     return params
 
 def fit_absorbance_vs_time_first_order(params, print_func=print):
 
     initial_guess = params['Initial guess kinetics']        # [A_inf, A_i, k]
-    absorbances = np.asarray(params['Kinetics abs'], dtype=float)
-    df_QYDS = params['QYDS df']
-    time = np.asarray(df_QYDS.iloc[:, 1], dtype=float)
+    df_kinetics = params['Kinetics df']
+    absorbances = df_kinetics['Absorbance'].to_numpy()
+    time = df_kinetics['Time / s'].to_numpy()
 
     def fitting_function(t, A_inf, A_i, k):
         return A_inf + (A_i - A_inf) * np.exp(-np.abs(k) * t) 
@@ -218,10 +258,9 @@ def plotting_spectra(params, ax=None):
 
 def plotting_photokinetics(params, ax=None):
 
-    absorbances = params['Kinetics abs']
-    df_QYDS = params['QYDS df']
-    time = df_QYDS.iloc[:, 1]
-    time = np.array(time)
+    df_kinetics = params['Kinetics df']
+    absorbances = df_kinetics['Absorbance'].to_numpy()
+    time = df_kinetics['Time / s'].to_numpy()
     t_fit = np.linspace(time[0], time[-1],1000)
     xmin = params['Plotting t_min'] 
     xmax = params['Plotting t_max']
@@ -258,11 +297,12 @@ def plotting(params, figure=None, testing=True):
         fig = figure
         fig.clf()  # Clear previous plots
 
-    subfig = fig.subfigures(1, 1)
-    axs = subfig.subplots(1, 2, sharey=True)
-
-    plotting_spectra(params, ax=axs[0])
-    plotting_photokinetics(params, ax=axs[1])
+    axs = fig.subplots(1, 2, sharey=True)
+    if params['Measurement type'] == 'Multiple Spectra':
+        plotting_spectra(params, ax=axs[0])
+        plotting_photokinetics(params, ax=axs[1])
+    else:
+        plotting_photokinetics(params, ax=axs[0])
 
     if testing:
         plt.show()
@@ -323,9 +363,11 @@ def get_testing_parameters(scenario=1):
         volume = 3 # mL
         conc_initial = 50E-6 # M
         irradiation_wavelength = 365 # nm
-        conversion_factor = 0.2315 # mW / V
+        channel = 'low'
         voltage_after_ref = 3.29 # V
         kinetics_wavelength = 350 # nm
+        measurement = "Multiple Spectra"
+        manual = 'manual'
         kinetics_p0 = [0,0,0]
 
         # Plotting parameters
@@ -349,9 +391,11 @@ def get_testing_parameters(scenario=1):
         volume = 3 # mL
         conc_initial = 18E-6 # M
         irradiation_wavelength = 365 # nm
-        conversion_factor = 0.25 # mW / V
+        channel = 'low'
         voltage_after_ref = 5.80 # V
         kinetics_wavelength = 350 # nm
+        measurement = "Multiple Spectra"
+        manual = 'manual'
         kinetics_p0 = [0,0,0]
 
         # Plotting parameters
@@ -375,10 +419,12 @@ def get_testing_parameters(scenario=1):
         volume = 2 # mL
         conc_initial = 54.5E-6 # M
         irradiation_wavelength = 365 # nm
-        conversion_factor = 4.9 # mW / V
+        channel = 'high'
         # voltage_after_ref = 7.49 # V
         voltage_after_ref = 2.21 # V
         kinetics_wavelength = 280 # nm
+        measurement = "Multiple Spectra"
+        manual = 'auto'
         kinetics_p0 = []
 
         # Plotting parameters
@@ -402,9 +448,11 @@ def get_testing_parameters(scenario=1):
         volume = 3 # mL
         conc_initial = 50E-6 # M
         irradiation_wavelength = 305 # nm
-        conversion_factor = 0.399 # mW / V
+        channel = 'low'
         voltage_after_ref = 7.12 # V
         kinetics_wavelength = 540 # nm
+        measurement = "Multiple Spectra"
+        manual = 'manual'
         kinetics_p0 = []
 
         # Plotting parameters
@@ -428,9 +476,11 @@ def get_testing_parameters(scenario=1):
         volume = 3 # mL
         conc_initial = 50E-6 # M
         irradiation_wavelength = 521 # nm
-        conversion_factor = 0.130 # mW / V
+        channel = 'low'
         voltage_after_ref = 9.31 # V
         kinetics_wavelength = 540 # nm
+        measurement = "Multiple Spectra"
+        manual = 'manual'
         kinetics_p0 = []
 
         # Plotting parameters
@@ -443,13 +493,43 @@ def get_testing_parameters(scenario=1):
         t_min = -5
         t_max = 605
 
+    if scenario == 6:
+
+        # Get Files
+        path = os.getcwd()
+        file_UV_Vis = r"E:\01_Raw\01_Azobenzene\UV_Vis\251205\251205_HAB_dioxane_kinetics365nm.csv"
+        file_QYDS =  r""
+
+        # Measurement parameters
+        volume = 3 # mL
+        conc_initial = 42E-6 # M
+        irradiation_wavelength = 365 # nm
+        channel = 'low'
+        voltage_after_ref = 3.46 # V
+        kinetics_wavelength = 365 # nm
+        measurement = "Kinetics"
+        manual = 'manual'
+        kinetics_p0 = []
+
+        # Plotting parameters
+        palette = 'viridis'
+        A_min = 0.8
+        A_max = 1.7
+        wl_min = 250
+        wl_max = 800
+        font_legend_spectra = 10
+        t_min = -5
+        t_max = 550
+
     return {
         'UV Vis file' : file_UV_Vis,
         'QYDS file' : file_QYDS,
         'Volume' : volume,
         'Concentration' : conc_initial,
         'Irradiation wavelength' : irradiation_wavelength,
-        'Conversion factor' : conversion_factor,
+        'Measurement type' : measurement,
+        'Channel' : channel,
+        'Automatic Measurements' : manual,
         'Voltage after ref' : voltage_after_ref,
         'Kinetics wavelength' : kinetics_wavelength,
         'Initial guess kinetics' : kinetics_p0,
@@ -468,25 +548,34 @@ def testing_main(scenario=1):
     # Get Parameters
     params = get_testing_parameters(scenario=scenario)
 
-    
-    # Create Dataframes
-    df_UV_Vis = produce_UV_Vis_dataframe(file=params['UV Vis file'])
-    params['UV Vis df'] = df_UV_Vis
-    df_QYDS = producte_QYDS_dataframe(file=params['QYDS file'],
-                                      rows_to_delete_indices_list=[],
-                                      print_option=False)
-    if scenario == 3:
-        df_QYDS = add_runtime_rows(df=df_QYDS,
-                            start=0,
-                            stop=162,
-                            step=9)
-    params['QYDS df'] = df_QYDS
+    if params['Measurement type'] == 'Multiple Spectra':
+        # Create Dataframes
+        df_UV_Vis = produce_UV_Vis_dataframe(file=params['UV Vis file'])
+        params['UV Vis df'] = df_UV_Vis
+        df_QYDS = producte_QYDS_dataframe(file=params['QYDS file'],
+                                        rows_to_delete_indices_list=[],
+                                        print_option=False)
+        if scenario == 3:
+            df_QYDS = add_runtime_rows(df=df_QYDS,
+                                start=0,
+                                stop=162,
+                                step=9)
+        params['QYDS df'] = df_QYDS
 
-    if len(df_QYDS) != len(df_UV_Vis.columns) - 1:
-        print(f'QYDS dataframe ({len(df_QYDS)}) and irradiation times ({len(df_UV_Vis.columns)}) have not the same length!')
-        return
-    
-    params = extract_absorption_at_wavelength(params=params)
+        if len(df_QYDS) != len(df_UV_Vis.columns) - 1:
+            print(f'QYDS dataframe ({len(df_QYDS)}) and irradiation times ({len(df_UV_Vis.columns)}) have not the same length!')
+            return
+        
+        params = create_kinetics_df(params=params)
+
+    else:
+        df_UV_Vis = produce_UV_Vis_dataframe(file=params['UV Vis file'])
+        df_kinetics = pd.DataFrame({
+            'Time / s' : df_UV_Vis.iloc[:,0]*60,
+            'Absorbance' : df_UV_Vis.iloc[:,1]
+        }) 
+        print(df_kinetics)
+        params['Kinetics df'] = df_kinetics
     
     params = calculate_photon_flux(params=params,
                                    print_func=print)
@@ -501,6 +590,10 @@ def testing_main(scenario=1):
 
     calculate_pseudo_total_QY(params=params,
                               print_func=print)
+
+def analyze(params,
+            print_func=print):
+    print('Hi')
 
 class Tooltip:
     def __init__(self, widget, text):
@@ -529,10 +622,6 @@ def run_gui():
     root = tk.Tk()
     root.title("UV-Vis & QYDS Analysis GUI")
     
-    # Make the window open in full screen
-    root.state('zoomed')  # For Windows
-    # Alternatively for cross-platform: root.attributes('-zoomed', True)
-    
     # Configure grid weights for proper resizing
     root.grid_columnconfigure(0, weight=0)  # Left column fixed
     root.grid_columnconfigure(1, weight=1)  # Right column expands
@@ -550,8 +639,8 @@ def run_gui():
         file = filedialog.askopenfilename(filetypes=[("All files", "*.*")])
         var.set(file)
 
-    file_UV_Vis_var = tk.StringVar()
-    file_QYDS_var = tk.StringVar()
+    file_UV_Vis_var = tk.StringVar(value=r'testfiles\251127_AzoAlaNH2_cycling_365_455_645nm.csv')
+    file_QYDS_var = tk.StringVar(value=r'testfiles\251117_C1_365nm.dat')
 
     ttk.Label(file_frame, text="UV Vis file:").grid(row=0, column=0, sticky="w", pady=2)
     ttk.Entry(file_frame, textvariable=file_UV_Vis_var, width=40).grid(row=1, column=0, padx=5, pady=2)
@@ -561,14 +650,68 @@ def run_gui():
     ttk.Entry(file_frame, textvariable=file_QYDS_var, width=40).grid(row=4, column=0, padx=5, pady=2)
     ttk.Button(file_frame, text="Browse", command=lambda: choose_file(file_QYDS_var)).grid(row=5, column=0, padx=5, pady=2, sticky="ew")
 
+    # ------------------- General Parameters -------------------
+    gen_frame = ttk.LabelFrame(left_frame, text="General Parameters", padding=10)
+    gen_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+
+    # Channel
+    ttk.Label(gen_frame, text="Channel:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
+    channel_var = tk.StringVar()
+    ttk.Combobox(
+        gen_frame,
+        textvariable=channel_var,
+        values=["high", "low"],
+        state="readonly"
+    ).grid(row=0, column=1, padx=5, pady=2)
+    channel_var.set("low")  
+
+    # Measurement type
+    ttk.Label(gen_frame, text="Measurement:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
+    measurement_var = tk.StringVar()
+    ttk.Combobox(
+        gen_frame,
+        textvariable=measurement_var,
+        values=["Multiple Spectra", "Kinetics"],
+        state="readonly"
+    ).grid(row=1, column=1, padx=5, pady=2)
+    measurement_var.set("Multiple Spectra")  
+
+    # ------------------- Automatic Measurements -------------------
+    auto_frame = ttk.LabelFrame(left_frame, text="Automatic Measurements Parameters", padding=10)
+    auto_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
+    
+    # Manual or Auto
+    ttk.Label(gen_frame, text="Manual/Auto:").grid(row=2, column=0, padx=10, pady=10, sticky="w")
+    manual_var = tk.StringVar()
+    ttk.Combobox(
+        gen_frame,
+        textvariable=manual_var,
+        values=["manual", "auto"],
+        state="readonly"
+    ).grid(row=2, column=1, padx=5, pady=2)
+    manual_var.set("manual")  
+
+    start = tk.StringVar(value='0')
+    stop = tk.StringVar(value='162')
+    step = tk.StringVar(value='9')
+
+    auto_params = [
+        ('Start', start),
+        ('Stop', stop),
+        ('Step', step)
+    ]
+
+    for i, (label, var) in enumerate(auto_params):
+        ttk.Label(auto_frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=2)
+        ttk.Entry(auto_frame, textvariable=var, width=20).grid(row=i, column=1, pady=2, padx=5)   
+
     # ------------------- Measurement parameters (MIDDLE) -------------------
     meas_frame = ttk.LabelFrame(left_frame, text="Measurement Parameters", padding=10)
-    meas_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+    meas_frame.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
 
     volume_var = tk.StringVar(value='3')
     conc_var = tk.StringVar(value='50')
     irradiation_var = tk.StringVar(value='365')
-    conversion_var = tk.StringVar(value='0.2315')
     voltage_var = tk.StringVar(value='3.29')
     kinetics_var = tk.StringVar(value='350')
     initial_guess_var = tk.StringVar(value='0,0,0')
@@ -577,7 +720,6 @@ def run_gui():
         ("Volume", volume_var),
         ("Concentration", conc_var),
         ("Irradiation wavelength", irradiation_var),
-        ("Conversion factor", conversion_var),
         ("Voltage after reference cuvette", voltage_var),
         ("Kinetics wavelength", kinetics_var),
         ("Initial guess kinetics", initial_guess_var)
@@ -585,11 +727,15 @@ def run_gui():
 
     for i, (label, var) in enumerate(meas_params):
         ttk.Label(meas_frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=2)
-        ttk.Entry(meas_frame, textvariable=var, width=20).grid(row=i, column=1, pady=2, padx=5)
+
+        if isinstance(var, tk.BooleanVar):
+            ttk.Checkbutton(meas_frame, variable=var).grid(row=i, column=1, sticky="w", padx=5, pady=2)
+        else:
+            ttk.Entry(meas_frame, textvariable=var, width=20).grid(row=i, column=1, pady=2, padx=5)
 
     # ------------------- Plotting parameters (BOTTOM) -------------------
     plot_frame = ttk.LabelFrame(left_frame, text="Plotting Parameters", padding=10)
-    plot_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
+    plot_frame.grid(row=4, column=0, sticky="nsew", pady=(0, 10))
 
     palette_var = tk.StringVar(value='crest')
     A_min_var = tk.StringVar(value='0')
@@ -616,7 +762,7 @@ def run_gui():
         ttk.Entry(plot_frame, textvariable=var, width=20).grid(row=i, column=1, pady=2, padx=5)
 
     # ------------------- Run button -------------------
-    ttk.Button(left_frame, text="Run Analysis", command=lambda: run_analysis()).grid(row=3, column=0, pady=10, sticky="ew")
+    ttk.Button(left_frame, text="Run Analysis", command=lambda: run_analysis()).grid(row=5, column=0, pady=10, sticky="ew")
 
     # ------------------- RIGHT COLUMN -------------------
     right_frame = ttk.Frame(root, padding=10)
@@ -630,7 +776,7 @@ def run_gui():
     plot_display_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
 
     # Create an empty figure as placeholder
-    fig = plt.Figure(figsize=(14, 6), dpi=100)
+    fig = plt.Figure(figsize=(14, 6), dpi=100)  
     canvas = FigureCanvasTkAgg(fig, master=plot_display_frame)
     canvas.draw()
     canvas.get_tk_widget().pack(fill='both', expand=False)
@@ -665,9 +811,11 @@ def run_gui():
             'Volume': float(volume_var.get()),
             'Concentration': concentation,
             'Irradiation wavelength': float(irradiation_var.get()),
-            'Conversion factor': float(conversion_var.get()),
+            'Channel': channel_var.get(),
+            'Automatic Measurements' : manual_var.get(),
             'Voltage after ref': float(voltage_var.get()),
             'Kinetics wavelength': float(kinetics_var.get()),
+            'Measurement type' : measurement_var.get(),
             'Initial guess kinetics': initial_guess_list,
             'Color palette': palette_var.get(),
             'Plotting A_min': float(A_min_var.get()),
@@ -678,18 +826,33 @@ def run_gui():
             'Plotting t_min': float(t_min_var.get()),
             'Plotting t_max': float(t_max_var.get()),
         }
-        # Data processing
-        df_UV_Vis = produce_UV_Vis_dataframe(file=params['UV Vis file'])
-        params['UV Vis df'] = df_UV_Vis
-        df_QYDS = producte_QYDS_dataframe(file=params['QYDS file'],
-                                        rows_to_delete_indices_list=[],
-                                        print_option=False)
-        params['QYDS df'] = df_QYDS
-        if len(df_QYDS) != len(df_UV_Vis.columns) - 1:
-            print(f'QYDS dataframe ({len(df_QYDS)}) and irradiation times ({len(df_UV_Vis.columns)}) have not the same length!')
-            return
 
-        params = extract_absorption_at_wavelength(params=params)
+        analyze(params=params,
+                print_func=print_to_output)
+
+        if params['Measured spectra']:
+            df_UV_Vis = produce_UV_Vis_dataframe(file=params['UV Vis file'])
+            params['UV Vis df'] = df_UV_Vis
+            df_QYDS = producte_QYDS_dataframe(file=params['QYDS file'],
+                                            rows_to_delete_indices_list=[],
+                                            print_option=False)
+            params['QYDS df'] = df_QYDS
+            if len(df_QYDS) != len(df_UV_Vis.columns) - 1:
+                print(f'QYDS dataframe ({len(df_QYDS)}) and irradiation times ({len(df_UV_Vis.columns)}) have not the same length!')
+                return
+            
+            params = create_kinetics_df(params=params)
+
+        if not params['Measured spectra']:
+            df_UV_Vis = produce_UV_Vis_dataframe(file=params['UV Vis file'])
+            df_kinetics = pd.DataFrame({
+                'Time / s' : df_UV_Vis.iloc[:,0]*60,
+                'Absorbance' : df_UV_Vis.iloc[:,1]
+            }) 
+            print(df_kinetics)
+            params['Kinetics df'] = df_kinetics           
+
+            
         
         params = calculate_photon_flux(params=params,
                                        print_func=print_to_output)
@@ -699,6 +862,7 @@ def run_gui():
 
         # Update the plot
         plotting(params=params, figure=fig)
+        canvas.figure = fig
         canvas.draw()
 
         calculate_QY(params=params,
@@ -713,11 +877,11 @@ def main(testing=False,
          testing_scenario=1):
     
     if testing:
-        testing_main(scenario=testing_scenario)
+        analyze(scenario=testing_scenario)
     else:
         run_gui()
 
 if __name__ == "__main__":
 
-    main(testing=True,
-         testing_scenario=4)
+    main(testing=False,
+         testing_scenario=6)
