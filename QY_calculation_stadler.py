@@ -169,7 +169,6 @@ def calculate_P_abs(params):
 
     return params
 
-
 def create_kinetics_df(params):
 
     if params['Measurement type'] == 'Multiple Spectra':
@@ -390,20 +389,34 @@ def get_initial_absorbance_at_irradiation_wavelength(params):
 
     return abs_i0
 
-def calculate_QY(params):
+def calculate_QY_stadler(params):
 
     print_func = params['Print function']
     k_fit = params['k']
     c_0 = params['Concentration']
     photon_flux = params['Photon flux per vol']
     A_i_0 = get_initial_absorbance_at_irradiation_wavelength(params=params)
-    I_abs = photon_flux*(1-10**(-A_i_0))
 
     QY_stadler = k_fit * c_0 / (photon_flux * (1 - 10**(-A_i_0)))
     
     print_func(f'A(i,0) = {A_i_0:.2f}')
     print_func('quantum yield from Stadler = {:.2f}'.format(QY_stadler) )
 
+def calculate_pseudo_total_QY_stadler(params):
+
+    print_func = params['Print function']
+    k_fit = params['k']
+    photon_flux = params['Photon flux per vol']
+    A_i_0 = get_initial_absorbance_at_irradiation_wavelength(params=params)
+
+    photo_kinetic_factor = ( 1 - 10**(-A_i_0) ) / A_i_0
+    Q = k_fit / ( 1 * photon_flux * photo_kinetic_factor ) 
+
+    print_func('pseudo total QY = {:.2e} L mol⁻¹ cm⁻¹'.format(Q))
+
+def calculate_QY_megerle(params):
+
+    print_func = params['Print function']
     V = params['Volume'] 
     P_abs = params['P abs']
     t = params['Irradiation time']
@@ -417,242 +430,7 @@ def calculate_QY(params):
     
     print_func(f'quantum yield from Megerle = {QY_QYDS}')
 
-
-
-def calculate_pseudo_total_QY(params):
-
-    print_func = params['Print function']
-    k_fit = params['k']
-    photon_flux = params['Photon flux per vol']
-    A_i_0 = get_initial_absorbance_at_irradiation_wavelength(params=params)
-
-    photo_kinetic_factor = ( 1 - 10**(-A_i_0) ) / A_i_0
-    Q = k_fit / ( 1 * photon_flux * photo_kinetic_factor ) 
-
-    print_func('pseudo total QY = {:.2e} L mol⁻¹ cm⁻¹'.format(Q))
-
-def get_testing_parameters(scenario=1):
-
-    if scenario == 1:
-
-        # Get Files
-        file_UV_Vis = r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251127_AzoAlaNH2_cycling_365_455_645nm.csv"
-        file_QYDS = r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251117_C1_365nm.dat"
-        file_kinetics = r''
-
-        # Measurement parameters
-        volume = 3 # mL
-        conc_initial = 50E-6 # M
-        irradiation_wavelength = 365 # nm
-        channel = 'low'
-        voltage_after_ref = 3.29 # V
-        kinetics_wavelength = 350 # nm
-        measurement = "Multiple Spectra"
-        manual = 'manual'
-        start = 0
-        stop = 0
-        step = 0
-        kinetics_p0 = [0,0,0]
-
-        # Plotting parameters
-        palette = 'crest'
-        A_min = 0
-        A_max = 0.8
-        wl_min = 300
-        wl_max = 800
-        font_legend_spectra = 10
-        t_min = -10
-        t_max = 610
-
-    if scenario == 2:
-
-        # Get Files
-        file_UV_Vis = r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\240409.csv"
-        file_QYDS =  r"testfiles\240409_CM27.dat"
-        file_kinetics = r''
-
-        # Measurement parameters
-        volume = 3 # mL
-        conc_initial = 18E-6 # M
-        irradiation_wavelength = 365 # nm
-        channel = 'low'
-        voltage_after_ref = 5.80 # V
-        kinetics_wavelength = 350 # nm
-        measurement = "Multiple Spectra"
-        manual = 'manual'
-        start = 0
-        stop = 0
-        step = 0
-        kinetics_p0 = [0,0,0]
-
-        # Plotting parameters
-        palette = 'crest'
-        A_min = 0
-        A_max = 0.25
-        wl_min = 300
-        wl_max = 600
-        font_legend_spectra = 8
-        t_min = -10
-        t_max = 610
-
-    if scenario == 3:
-    
-        # Get Files
-        file_UV_Vis = r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\oNBA_Water_365nm_100mA.csv"
-        file_QYDS = r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\oNBA_Water_365nm_100mA.dat"
-        file_kinetics = r''
-
-        # Measurement parameters
-        volume = 2 # mL
-        conc_initial = 54.5E-6 # M
-        irradiation_wavelength = 365 # nm
-        channel = 'high'
-        # voltage_after_ref = 7.49 # V
-        voltage_after_ref = 2.21 # V
-        kinetics_wavelength = 280 # nm
-        measurement = "Multiple Spectra"
-        manual = 'auto'
-        start = 0
-        stop = 162
-        step = 9
-        kinetics_p0 = []
-
-        # Plotting parameters
-        palette = 'crest'
-        A_min = 0
-        A_max = 1
-        wl_min = 200
-        wl_max = 500
-        font_legend_spectra = 8
-        t_min = -5
-        t_max = 175
-
-    if scenario == 4:
-
-        # Get Files
-        file_UV_Vis = r"testfiles\251204_305nm.csv"
-        file_QYDS =  r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251204_2nd_305nm.dat"
-        file_kinetics = r''
-
-        # Measurement parameters
-        volume = 3 # mL
-        conc_initial = 50E-6 # M
-        irradiation_wavelength = 305 # nm
-        channel = 'low'
-        voltage_after_ref = 7.12 # V
-        kinetics_wavelength = 540 # nm
-        measurement = "Multiple Spectra"
-        manual = 'manual'
-        start = 0
-        stop = 0
-        step = 0
-        kinetics_p0 = []
-
-        # Plotting parameters
-        palette = 'viridis'
-        A_min = 0
-        A_max = 0.8
-        wl_min = 250
-        wl_max = 800
-        font_legend_spectra = 10
-        t_min = -5
-        t_max = 500
-    
-    if scenario == 5:
-
-        # Get Files
-        file_UV_Vis = r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251204_521nm.csv"
-        file_QYDS =  r"C:\Users\metzen\sciebo\Promotion\10_Scripts\00_Github\QYDS_Quantum_Yield_Calculator\testfiles\251204_2nd_305_PSS_521nm.dat"
-        file_kinetics = r''
-
-        # Measurement parameters
-        volume = 3 # mL
-        conc_initial = 50E-6 # M
-        irradiation_wavelength = 521 # nm
-        channel = 'low'
-        voltage_after_ref = 9.31 # V
-        kinetics_wavelength = 540 # nm
-        measurement = "Multiple Spectra"
-        manual = 'manual'
-        start = 0
-        stop = 0
-        step = 0
-        kinetics_p0 = []
-
-        # Plotting parameters
-        palette = 'viridis'
-        A_min = -0.01
-        A_max = 0.8
-        wl_min = 250
-        wl_max = 800
-        font_legend_spectra = 10
-        t_min = -5
-        t_max = 605
-
-    if scenario == 6:
-
-        # Get Files
-        file_UV_Vis = r"E:\01_Raw\01_Azobenzene\UV_Vis\251205\251205_HAB_42uM_dioxane_teq.csv"
-        file_QYDS =  r""
-        file_kinetics = r"E:\01_Raw\01_Azobenzene\UV_Vis\251205\251205_HAB_dioxane_kinetics365nm.csv"
-
-        # Measurement parameters
-        volume = 3 # mL
-        conc_initial = 42E-6 # M
-        irradiation_wavelength = 365 # nm
-        channel = 'low'
-        voltage_after_ref = 3.46 # V
-        kinetics_wavelength = 365 # nm
-        measurement = "Kinetics"
-        manual = 'manual'
-        start = 0
-        stop = 0
-        step = 0
-        kinetics_p0 = []
-
-        # Plotting parameters
-        palette = 'viridis'
-        A_min = 0.8
-        A_max = 1.7
-        wl_min = 250
-        wl_max = 800
-        font_legend_spectra = 10
-        t_min = -5
-        t_max = 550
-
-    return {
-        'Testing' : True,
-        'Print function' : print,
-        'UV Vis file' : file_UV_Vis,
-        'QYDS file' : file_QYDS,
-        'Kinetics file' : file_kinetics,
-        'Volume' : volume,
-        'Concentration' : conc_initial,
-        'Irradiation wavelength' : irradiation_wavelength,
-        'Measurement type' : measurement,
-        'Channel' : channel,
-        'Automatic Measurements' : manual,
-        'Voltage after ref' : voltage_after_ref,
-        'Kinetics wavelength' : kinetics_wavelength,
-        'Initial guess kinetics' : kinetics_p0,
-        'Color palette' : palette,
-        'Plotting A_min' : A_min,
-        'Plotting A_max' : A_max,
-        'Plotting wl_min' : wl_min,
-        'Plotting wl_max' : wl_max,
-        'Legend fontsize spectra' : font_legend_spectra,
-        'Plotting t_min' : t_min,
-        'Plotting t_max' : t_max,
-        'Start' : start,
-        'Stop' : stop,
-        'Step' : step,
-    }
-
-def analyze(params=None,
-            scenario=1):
-    
-    if not params:
-        params = get_testing_parameters(scenario=scenario)
+def stadler_analysis(params=None):
     
     if params['Measurement type'] == 'Multiple Spectra':
         produce_UV_Vis_dataframe(params=params)
@@ -670,10 +448,9 @@ def analyze(params=None,
         create_kinetics_df(params=params)
 
     calculate_photon_flux(params=params)
-    calculate_P_abs(params=params)
     fit_absorbance_vs_time_first_order(params=params)
-    calculate_QY(params=params)
-    calculate_pseudo_total_QY(params=params)
+    calculate_QY_stadler(params=params)
+    calculate_pseudo_total_QY_stadler(params=params)
     if params['Testing']:
         plotting(params=params)
         return
@@ -706,53 +483,50 @@ class Tooltip:
 def run_gui():
     root = tk.Tk()
     root.title("UV-Vis & QYDS Analysis GUI")
+    root.state('zoomed') 
     
-    # Configure grid weights for proper resizing
+    # Configure grid
     root.grid_columnconfigure(0, weight=0)  # Left column fixed
     root.grid_columnconfigure(1, weight=1)  # Right column expands
     root.grid_rowconfigure(0, weight=1)     # Allow vertical expansion
 
-    # Left column
+    # ========== LEFT COLUMN ==========
     left_frame = ttk.Frame(root, padding=10)
     left_frame.grid(row=0, column=0, sticky="nsew", padx=(10, 5), pady=10)
-    
-    # File selection
-    file_frame = ttk.LabelFrame(left_frame, text="File Selection", padding=10)
-    file_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+    left_frame.grid_columnconfigure(0, weight=1)
+    left_frame.grid_rowconfigure(2, weight=1)  # Allow method params to expand
 
-    def choose_file(var):
-        file = filedialog.askopenfilename(filetypes=[("All files", "*.*")])
-        var.set(file)
+    # Title
+    title_label = ttk.Label(
+        left_frame,
+        text="Select QY Calculation",
+        font=("TkDefaultFont", 14, "bold")
+    )
+    title_label.grid(row=0, column=0, pady=(0, 10), sticky="w")
 
-    file_UV_Vis_var = tk.StringVar(value=r"E:\01_Raw\01_Azobenzene\UV_Vis\251205\251205_HAB_42uM_dioxane_teq.csv")
-    file_QYDS_var = tk.StringVar(value=r'')
-    file_initial_spectrum_var = tk.StringVar(value=r"E:\01_Raw\01_Azobenzene\UV_Vis\251205\251205_HAB_dioxane_kinetics365nm.csv")
+    # Method Selection Tabs
+    notebook = ttk.Notebook(left_frame)
+    notebook.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+    notebook.enable_traversal()
 
-    ttk.Label(file_frame, text="UV Vis file:").grid(row=0, column=0, sticky="w", pady=2)
-    ttk.Entry(file_frame, textvariable=file_UV_Vis_var, width=40).grid(row=1, column=0, padx=5, pady=2)
-    ttk.Button(file_frame, text="Browse", command=lambda: choose_file(file_UV_Vis_var)).grid(row=2, column=0, padx=5, pady=2, sticky="ew")
+    tab_stadler = ttk.Frame(notebook)
+    tab_megerle = ttk.Frame(notebook)
+    tab_stanius = ttk.Frame(notebook)
 
-    ttk.Label(file_frame, text="QYDS file:").grid(row=3, column=0, sticky="w", pady=(10, 2))
-    ttk.Entry(file_frame, textvariable=file_QYDS_var, width=40).grid(row=4, column=0, padx=5, pady=2)
-    ttk.Button(file_frame, text="Browse", command=lambda: choose_file(file_QYDS_var)).grid(row=5, column=0, padx=5, pady=2, sticky="ew")
+    notebook.add(tab_stadler, text="Stadler")
+    notebook.add(tab_megerle, text="Megerle")
+    notebook.add(tab_stanius, text="Stanius")
 
-    ttk.Label(file_frame, text="In case of Kinetics: Kinetic file:").grid(row=6, column=0, sticky="w", pady=(10, 2))
-    ttk.Entry(file_frame, textvariable=file_initial_spectrum_var, width=40).grid(row=7, column=0, padx=5, pady=2)
-    ttk.Button(file_frame, text="Browse", command=lambda: choose_file(file_initial_spectrum_var)).grid(row=8, column=0, padx=5, pady=2, sticky="ew")
+    # Method-specific content container
+    method_param_area = ttk.Frame(left_frame)
+    method_param_area.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
+    method_param_area.grid_columnconfigure(0, weight=1)
+
+    # ========== GLOBAL PARAMETERS (visible in all tabs) ==========
 
     # General Parameteers
-    gen_frame = ttk.LabelFrame(left_frame, text="General Parameters", padding=10)
-    gen_frame.grid(row=0, column=1, sticky="nsew", pady=(0, 10))
-
-    ttk.Label(gen_frame, text="Channel:").grid(row=0, column=0, padx=10, pady=10, sticky="w")
-    channel_var = tk.StringVar()
-    ttk.Combobox(
-        gen_frame,
-        textvariable=channel_var,
-        values=["high", "low"],
-        state="readonly"
-    ).grid(row=0, column=1, padx=5, pady=2)
-    channel_var.set("low")  
+    gen_frame = ttk.LabelFrame(method_param_area, text="General Parameters", padding=10)
+    gen_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
 
     ttk.Label(gen_frame, text="Measurement:").grid(row=1, column=0, padx=10, pady=10, sticky="w")
     measurement_var = tk.StringVar()
@@ -773,48 +547,85 @@ def run_gui():
         state="readonly"
     ).grid(row=2, column=1, padx=5, pady=2)
     manual_var.set("manual")  
+    
+    # File Selection
+    file_frame = ttk.LabelFrame(method_param_area, text="File Selection", padding=8)
+    file_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+    file_frame.grid_columnconfigure(0, weight=1)
 
-    # Measurement parameters
-    meas_frame = ttk.LabelFrame(left_frame, text="Measurement Parameters", padding=10)
-    meas_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 10))
+    def choose_file(var):
+        file = filedialog.askopenfilename(filetypes=[("All files", "*.*")])
+        if file:
+            var.set(file)
+
+    file_UV_Vis_var = tk.StringVar(value=r"E:\01_Raw\01_Azobenzene\UV_Vis\251205\251205_HAB_42uM_dioxane_teq.csv")
+    file_QYDS_var = tk.StringVar(value=r'')
+    file_kinetics = tk.StringVar(value=r"E:\01_Raw\01_Azobenzene\UV_Vis\251205\251205_HAB_dioxane_kinetics365nm.csv")
+
+    ttk.Label(file_frame, text="UV Vis file:").grid(row=0, column=0, sticky="w")
+    entry_frame1 = ttk.Frame(file_frame)
+    entry_frame1.grid(row=1, column=0, sticky="ew", pady=2)
+    entry_frame1.grid_columnconfigure(0, weight=1)
+    ttk.Entry(entry_frame1, textvariable=file_UV_Vis_var).grid(row=0, column=0, sticky="ew", padx=(0, 5))
+    ttk.Button(entry_frame1, text="Browse", command=lambda: choose_file(file_UV_Vis_var)).grid(row=0, column=1)
+
+    ttk.Label(file_frame, text="QYDS file:").grid(row=2, column=0, sticky="w", pady=(6,0))
+    entry_frame2 = ttk.Frame(file_frame)
+    entry_frame2.grid(row=3, column=0, sticky="ew", pady=2)
+    entry_frame2.grid_columnconfigure(0, weight=1)
+    ttk.Entry(entry_frame2, textvariable=file_QYDS_var).grid(row=0, column=0, sticky="ew", padx=(0, 5))
+    ttk.Button(entry_frame2, text="Browse", command=lambda: choose_file(file_QYDS_var)).grid(row=0, column=1)
+
+    ttk.Label(file_frame, text="Kinetic file:").grid(row=4, column=0, sticky="w", pady=(6,0))
+    entry_frame3 = ttk.Frame(file_frame)
+    entry_frame3.grid(row=5, column=0, sticky="ew", pady=2)
+    entry_frame3.grid_columnconfigure(0, weight=1)
+    ttk.Entry(entry_frame3, textvariable=file_kinetics).grid(row=0, column=0, sticky="ew", padx=(0, 5))
+    ttk.Button(entry_frame3, text="Browse", command=lambda: choose_file(file_kinetics)).grid(row=0, column=1)
+
+    # Global Measurement Parameters
+    meas_frame = ttk.LabelFrame(method_param_area, text="Global Parameters", padding=8)
+    meas_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+    meas_frame.grid_columnconfigure(1, weight=1)
 
     volume_var = tk.StringVar(value='3')
     conc_var = tk.StringVar(value='42')
     irradiation_var = tk.StringVar(value='365')
     voltage_var = tk.StringVar(value='3.46')
-    voltage_sample_var = tk.StringVar(value='3.287')
-    irradiation_time_var = tk.StringVar(value='545')
     kinetics_var = tk.StringVar(value='350')
     initial_guess_var = tk.StringVar(value='0,0,0')
     start_var = tk.StringVar(value='0')
     stop_var = tk.StringVar(value='0')
     step_var = tk.StringVar(value='0')
 
+    ttk.Label(meas_frame, text="Channel:").grid(row=0, column=0, sticky="w", pady=2, padx=(2,6))
+    channel_var = tk.StringVar()
+    ttk.Combobox(
+        meas_frame,
+        textvariable=channel_var,
+        values=["high", "low"],
+        state="readonly"
+    ).grid(row=0, column=1, pady=2, padx=5, sticky="ew")
+    channel_var.set("low")  
+
     meas_params = [
-        ("Volume", volume_var),
-        ("Concentration", conc_var),
-        ("Irradiation wavelength", irradiation_var),
-        ("Voltage after reference cuvette", voltage_var),
-        ('Voltage after sample', voltage_sample_var),
-        ('Irradiation time', irradiation_time_var),
-        ("Kinetics wavelength", kinetics_var),
+        ("Irradiation wavelength / nm", irradiation_var),
+        ("Voltage after reference cuvette / V", voltage_var),
+        ("Kinetics wavelength / nm", kinetics_var),
+        ("Volume / mL", volume_var),
         ("Initial guess kinetics", initial_guess_var),
-        ('Start', start_var),
-        ('Stop', stop_var),
-        ('Step', step_var)
+        ("For automatic spectra: Start / s", start_var),
+        ("For automatic spectra: Stop / s", stop_var),
+        ("For automatic spectra: Steps / s", step_var)
     ]
 
     for i, (label, var) in enumerate(meas_params):
-        ttk.Label(meas_frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=2)
-
-        if isinstance(var, tk.BooleanVar):
-            ttk.Checkbutton(meas_frame, variable=var).grid(row=i, column=1, sticky="w", padx=5, pady=2)
-        else:
-            ttk.Entry(meas_frame, textvariable=var, width=20).grid(row=i, column=1, pady=2, padx=5)
+        ttk.Label(meas_frame, text=label + ":").grid(row=i+1, column=0, sticky="w", pady=2, padx=(2,6))
+        ttk.Entry(meas_frame, textvariable=var, width=18).grid(row=i+1, column=1, pady=2, padx=5, sticky="ew")
 
     # Plotting parameters
-    plot_frame = ttk.LabelFrame(left_frame, text="Plotting Parameters", padding=10)
-    plot_frame.grid(row=1, column=1, sticky="nsew", pady=(0, 10))
+    plot_frame = ttk.LabelFrame(method_param_area, text="Plotting Parameters", padding=10)
+    plot_frame.grid(row=2, column=1, sticky="nsew", pady=(0, 10))
 
     palette_var = tk.StringVar(value='crest')
     A_min_var = tk.StringVar(value='0')
@@ -840,33 +651,78 @@ def run_gui():
         ttk.Label(plot_frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=2)
         ttk.Entry(plot_frame, textvariable=var, width=20).grid(row=i, column=1, pady=2, padx=5)
 
-    # --------------------------
-    # OUTPUT FRAME (RIGHT SIDE)
-    # --------------------------
+    # ========== METHOD-SPECIFIC PARAMETERS ==========
+    
+    # Stadler Parameters
+    stadler_frame = ttk.LabelFrame(method_param_area, text="Stadler Parameters", padding=8)
+    stadler_frame.grid_columnconfigure(1, weight=1)
+
+    conc_var = tk.StringVar(value='42')
+
+    stadler_params = [
+        ("Concentration / µM", conc_var),
+    ]
+
+    for i, (label, var) in enumerate(stadler_params):
+        ttk.Label(stadler_frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=2, padx=(2,6))
+        ttk.Entry(stadler_frame, textvariable=var, width=18).grid(row=i, column=1, sticky="ew", padx=5, pady=2)
+
+    # Megerle Parameters
+    megerle_frame = ttk.LabelFrame(method_param_area, text="Megerle Parameters", padding=8)
+    megerle_frame.grid_columnconfigure(1, weight=1)
+
+    voltage_sample_var = tk.StringVar(value='3.287')
+    irradiation_time_var = tk.StringVar(value='545')
+    reflectivity_var = tk.StringVar(value='0.036')
+
+    megerle_params = [
+        ("Voltage after sample / V", voltage_sample_var),
+        ("Irradiation time / s", irradiation_time_var),
+        ('Reflectivity', reflectivity_var),
+    ]
+
+    for i, (label, var) in enumerate(megerle_params):
+        ttk.Label(megerle_frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=2, padx=(2,6))
+        ttk.Entry(megerle_frame, textvariable=var, width=18).grid(row=i, column=1, sticky="ew", padx=5, pady=2)
+
+    # Stanius Parameters
+    stanius_frame = ttk.LabelFrame(method_param_area, text="Stanius Parameters", padding=8)
+    stanius_frame.grid_columnconfigure(1, weight=1)
+
+    alpha_stanius = tk.StringVar(value='0.5')
+    beta_stanius = tk.StringVar(value='1.2')
+
+    stanius_params = [
+        ("Alpha", alpha_stanius),
+        ("Beta", beta_stanius),
+    ]
+
+    for i, (label, var) in enumerate(stanius_params):
+        ttk.Label(stanius_frame, text=label + ":").grid(row=i, column=0, sticky="w", pady=2, padx=(2,6))
+        ttk.Entry(stanius_frame, textvariable=var, width=18).grid(row=i, column=1, sticky="ew", padx=5, pady=2)
+
+    # ========== RIGHT COLUMN ==========
     right_frame = ttk.Frame(root, padding=10)
     right_frame.grid(row=0, column=1, sticky="nsew")
     right_frame.grid_rowconfigure(1, weight=1)
     right_frame.grid_columnconfigure(0, weight=1)
 
-    # Button to start analysis
-    run_button = ttk.Button(right_frame, text="Run Analysis", command=lambda: run_analysis())
-    run_button.grid(row=0, column=0, sticky="ew", pady=5)
-
-    # Text output window
+    # Output text box
+    output_label = ttk.Label(right_frame, text="Output", font=("TkDefaultFont", 10, "bold"))
+    output_label.grid(row=0, column=0, sticky="w")
+    
     output_box = tk.Text(right_frame, height=12, wrap="word")
-    output_box.grid(row=1, column=0, sticky="nsew", pady=5)
+    output_box.grid(row=1, column=0, sticky="nsew", pady=(5, 10))
 
-    # --------------------------
-    # MATPLOTLIB CANVAS
-    # --------------------------
+    # Plot area
+    plot_label = ttk.Label(right_frame, text="Plots", font=("TkDefaultFont", 10, "bold"))
+    plot_label.grid(row=2, column=0, sticky="w")
+    
     fig = plt.Figure(figsize=(12, 5), dpi=100)
     canvas = FigureCanvasTkAgg(fig, master=right_frame)
-    canvas.get_tk_widget().grid(row=2, column=0, sticky="nsew", pady=5)
+    canvas.get_tk_widget().grid(row=3, column=0, sticky="nsew", pady=(5, 0))
 
-    # --------------------------
-    # MAIN RUN FUNCTION
-    # --------------------------
-    def run_analysis():
+    def general_analyis():
         output_box.delete("1.0", tk.END)
 
         def printer(x):
@@ -879,13 +735,10 @@ def run_gui():
             'Print function' : printer,
             "UV Vis file": file_UV_Vis_var.get(),
             "QYDS file": file_QYDS_var.get(),
-            'Kinetics file': file_initial_spectrum_var.get(),
+            'Kinetics file': file_kinetics.get(),
             "Volume": float(volume_var.get()),
-            "Concentration": float(conc_var.get()) * 1e-6,  # µM → M?
             "Irradiation wavelength": float(irradiation_var.get()),
             "Voltage after ref": float(voltage_var.get()),
-            'Voltage after sample' : float(voltage_sample_var.get()),
-            'Irradiation time' : float(irradiation_time_var.get()),
             "Kinetics wavelength": float(kinetics_var.get()),
             "Initial guess kinetics": [float(x) for x in initial_guess_var.get().split(",")],
             "Channel": channel_var.get(),
@@ -907,27 +760,69 @@ def run_gui():
             params["Stop"] = float(stop_var.get())
             params["Step"] = float(step_var.get())
 
+        return params
+
+    # Define the analysis functions
+    def run_stadler():
+        params = general_analyis()
+        params["Concentration"] = float(conc_var.get()) * 1e-6
+
+        output_box.insert(tk.END, "Starting QY Calculation from Stadler\n")
         try:
-            analyze(params=params)
-            # Plot
+            stadler_analysis(params=params)
             fig.clf()
             plotting(params, figure=fig)
             canvas.draw()
-            
         except Exception as e:
             messagebox.showerror("Error", str(e))
+    
+    def run_megerle():
+        params = general_analyis()
+        params['Voltage after sample'] = float(voltage_sample_var.get())
+        params['Irradiation time'] = float(irradiation_time_var.get())
+        params['Reflectivity'] = float(reflectivity_var.get())
+
+        output_box.insert(tk.END, "Running Megerle analysis...\n")
+        # Add your Megerle analysis code here
+    
+    def run_stanius():
+        params = general_analyis()
+        output_box.insert(tk.END, "Running Stanius analysis...\n")
+        # Add your Stanius analysis code here
+
+    start_button = ttk.Button(method_param_area, text="Start Stadler Analysis", command=run_stadler)
+    start_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0), padx=5)
+
+    # Tab change handler
+    def on_tab_change(event):
+        selected = notebook.index(notebook.select())
+
+        # Hide all method-specific frames
+        stadler_frame.grid_forget()
+        megerle_frame.grid_forget()
+        stanius_frame.grid_forget()
+
+        # Show the selected method frame
+        if selected == 0:
+            stadler_frame.grid(row=0, column=1, sticky="nsew", pady=(0, 10))
+            start_button = ttk.Button(method_param_area, text="Start Stadler Analysis", command=run_stadler)
+            start_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0), padx=5)
+        elif selected == 1:
+            megerle_frame.grid(row=0, column=1, sticky="nsew", pady=(0, 10))
+            start_button = ttk.Button(method_param_area, text="Start Megerle Analysis", command=run_megerle)
+            start_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0), padx=5)
+        elif selected == 2:
+            stanius_frame.grid(row=0, column=1, sticky="nsew", pady=(0, 10))
+            start_button = ttk.Button(method_param_area, text="Start Stanius Analysis", command=run_stanius)
+            start_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0), padx=5)
+
+    # Initialize with first tab
+    stadler_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+    
+    notebook.bind("<<NotebookTabChanged>>", on_tab_change)
 
     root.mainloop()
 
-def main(testing=False,
-         testing_scenario=1):
-    
-    if testing:
-        analyze(scenario=testing_scenario)
-    else:
-        run_gui()
-
 if __name__ == "__main__":
 
-    main(testing=False,
-         testing_scenario=6)
+    run_gui()
