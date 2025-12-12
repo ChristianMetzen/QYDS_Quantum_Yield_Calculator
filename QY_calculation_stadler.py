@@ -508,12 +508,15 @@ def run_gui():
     notebook.enable_traversal()
 
     tab_stadler = ttk.Frame(notebook)
-    tab_megerle = ttk.Frame(notebook)
+    tab_oleksii = ttk.Frame(notebook)
     tab_stanius = ttk.Frame(notebook)
+    tab_megerle = ttk.Frame(notebook)
+    
 
     notebook.add(tab_stadler, text="Stadler")
-    notebook.add(tab_megerle, text="Megerle")
+    notebook.add(tab_oleksii, text="Oleksii")
     notebook.add(tab_stanius, text="Stanius")
+    notebook.add(tab_megerle, text="Megerle")
 
     # Method-specific content container
     method_param_area = ttk.Frame(left_frame)
