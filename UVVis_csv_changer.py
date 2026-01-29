@@ -20,7 +20,7 @@ def choose_file(tree):
     else:
         last_row_with_data = len(df)
 
-    df_original = df.iloc[1:last_row_with_data]  # skip header + empty rows
+    df_original = df.iloc[0:last_row_with_data]  # skip header + empty rows
     update_table(df_original, tree)
     return df_original
 
