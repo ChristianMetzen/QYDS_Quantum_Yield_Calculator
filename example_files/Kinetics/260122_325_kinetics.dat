@@ -1,0 +1,17 @@
+#1 Protocol QYDS measurement
+#2 Date:     	22.01.2026
+#3 Sample:    	40 uM AB in MeOH 3 mL, 78 mA
+#4 Researcher:	Seppl, Knut
+#5 LED:     	3 DOWA EOLS-325-696 325 nm
+#6 Filter::    	None
+#7 Solar Cell:	HV-00X
+#8 Voltage after reference cuvette (V):	9.35 / 8.28 low
+#9 Calibration Factor (mW/V):          	NaN
+#10 Power after reference cuvette (mW):	X.XXX
+#11 Insert comments below, do not change the header up to here
+
+
+Number	TimeStart	TimeEnd        	Runtime   	Illum.-Time	Power(mW)	Cell (mW)	Voltage(V)	Current(A)
+0	14:33:15,966	14:33:15,966	0,000   	0,000   	0,141   	0,000   	0,000   	0,000   
+1	17:59:17,727	18:09:08,296	590,400   	590,400   	0,043   	6,797   	0,000   	0,000   
+	
