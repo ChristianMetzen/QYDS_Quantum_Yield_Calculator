@@ -1,0 +1,7 @@
+2026-04-09 17:41:53,059 - INFO - Logging initialized
+2026-04-09 17:41:53,059 - INFO - Starting Ladányi QY analysis
+2026-04-09 17:41:53,059 - INFO - Irradiation: 325.0 nm, channel: low, voltage: 7.465 V
+2026-04-09 17:41:53,059 - INFO - Volume: 3.0 mL, concentration: 40.0 µM
+2026-04-09 17:41:53,061 - INFO - Correction factor = 0.34 mW V-1
+2026-04-09 17:41:53,062 - INFO - Photon flux = 2.2816e-06 mol s-1 L-1 / 6.8448e-09 mol s-1 / 4.1220e+15 s-1
+2026-04-09 17:41:53,077 - INFO - QY trans->cis = 0.1963, cis->trans = 0.2792

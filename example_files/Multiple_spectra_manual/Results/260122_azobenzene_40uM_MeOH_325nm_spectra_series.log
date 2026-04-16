@@ -1,10 +1,10 @@
-2026-01-29 16:12:05,389 - INFO - Logging initialized
-2026-01-29 16:12:05,390 - INFO - Log file: C:/Users/metzen/sciebo/Promotion/10_Scripts/00_Github/QYDS_Quantum_Yield_Calculator/example_files/Multiple_spectra_manual/Results\260122_azobenzene_40uM_MeOH_325nm_spectra_series.log
-2026-01-29 16:12:05,390 - INFO - Started Ladanyi Analyis
-2026-01-29 16:12:05,390 - INFO - Measurement type is Multiple Spectra
-2026-01-29 16:12:05,390 - INFO - The measurement is perfomed in manual mode
-2026-01-29 16:12:05,391 - INFO - Irradiation was at 325.0 nm in the low channel with 7.465 V behind the reference cuvette
-2026-01-29 16:12:05,391 - INFO - The volume was 3.0 mL and the concentration 3.9999999999999996e-05 M
-2026-01-29 16:12:05,393 - INFO - Conversion factor = 0.34 mW V-1
-2026-01-29 16:12:05,393 - INFO - Photon flux is 2.2816e-06 mol s-1 L-1 or 6.8448e-09 mol s-1 or 4.1220e+15 s-1
-2026-01-29 16:12:05,426 - INFO - The trans to cis quantum yield is 0.2028 and the cis to trans quantum yield 0.3342
+2026-02-23 09:25:40,336 - INFO - Logging initialized
+2026-02-23 09:25:40,336 - INFO - Log file: C:/Users/metzen/sciebo/Promotion/10_Scripts/00_Github/QYDS_Quantum_Yield_Calculator/example_files/Multiple_spectra_manual/Results\260122_azobenzene_40uM_MeOH_325nm_spectra_series.log
+2026-02-23 09:25:40,336 - INFO - Started Ladanyi Analyis
+2026-02-23 09:25:40,337 - INFO - Measurement type is Multiple Spectra
+2026-02-23 09:25:40,337 - INFO - The measurement is perfomed in manual mode
+2026-02-23 09:25:40,337 - INFO - Irradiation was at 325.0 nm in the low channel with 7.465 V behind the reference cuvette
+2026-02-23 09:25:40,337 - INFO - The volume was 3.0 mL and the concentration 3.9999999999999996e-05 M
+2026-02-23 09:25:40,338 - INFO - Conversion factor = 0.34 mW V-1
+2026-02-23 09:25:40,338 - INFO - Photon flux is 2.2816e-06 mol s-1 L-1 or 6.8448e-09 mol s-1 or 4.1220e+15 s-1
+2026-02-23 09:25:40,370 - INFO - The trans to cis quantum yield is 0.1946 and the cis to trans quantum yield 0.2823
