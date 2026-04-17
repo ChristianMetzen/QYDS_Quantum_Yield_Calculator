@@ -169,7 +169,8 @@ def ladanyi_fit(params):
     y     = V * dc_A / dQ
     alpha = (1 / constants.Avogadro) * (1 - 10**(-A_m)) / A_m
     X     = np.column_stack([alpha * c_B_m * e_B, -alpha * c_A_m * e_A])
-    Phi_est, *_ = np.linalg.lstsq(X, y, rcond=None)
+    finite_mask = np.isfinite(y) & np.isfinite(X).all(axis=1)
+    Phi_est, *_ = np.linalg.lstsq(X[finite_mask], y[finite_mask], rcond=None)
     initial_guess = [Phi_est[1], Phi_est[0]]
 
     def dcA_dt(t, y, phi_A, phi_B):
@@ -189,9 +190,9 @@ def ladanyi_fit(params):
     popt, _ = curve_fit(model, times, c_A, p0=initial_guess)
     phi_A_fit, phi_B_fit = popt
 
-    print_func(f"\u03a6({names[0]}\u2192{names[1]}) = {phi_A_fit:.4f}")
-    print_func(f"\u03a6({names[1]}\u2192{names[0]}) = {phi_B_fit:.4f}")
-    logger.info(f'QY {names[0]}->{names[1]} = {phi_A_fit:.4f}, {names[1]}->{names[0]} = {phi_B_fit:.4f}')
+    print_func(f"\u03a6({names[0]}\u2192{names[1]}) = {phi_A_fit:.4e}")
+    print_func(f"\u03a6({names[1]}\u2192{names[0]}) = {phi_B_fit:.4e}")
+    logger.info(f'QY {names[0]}->{names[1]} = {phi_A_fit:.4e}, {names[1]}->{names[0]} = {phi_B_fit:.4e}')
 
     params['Ladanyi QY A->B'] = phi_A_fit
     params['Ladanyi QY B->A'] = phi_B_fit
@@ -286,11 +287,11 @@ def plotting_conc_and_fit(params, ax):
     cB_fit = (cA0 + cB0) - cA_fit   # mass balance in mol/L, convert below
 
     # Scatter points
-    ax.scatter(times, c_A * 1e6, color='C0', s=12, zorder=3, label=names[0])
-    ax.scatter(times, c_B * 1e6, color='C1', s=12, zorder=3, label=names[1])
+    ax.scatter(times, c_A * 1e6, color='C0', s=12, zorder=2, label=names[0])
+    ax.scatter(times, c_B * 1e6, color='C1', s=12, zorder=2, label=names[1])
     # Fit lines overlaid in matching colours
-    ax.plot(times, cA_fit * 1e6, color='C0', linewidth=1.5)
-    ax.plot(times, cB_fit * 1e6, color='C1', linewidth=1.5, label='fit')
+    ax.plot(times, cA_fit * 1e6, color='C0', linewidth=1.5, zorder=3)
+    ax.plot(times, cB_fit * 1e6, color='black', linewidth=1.5, zorder=3, label='fit')
 
     ax.set_xlabel('irradiation time / s')
     ax.set_ylabel('concentration / µM')
@@ -480,6 +481,7 @@ def run_gui():
 
         # Load kinetics df and detect whether it has spectra (>1 row)
         df_kinetics = pd.read_csv(kin_file)
+        df_kinetics = df_kinetics.dropna(axis=1)   # drop time columns that contain any NaN
         has_spectra = df_kinetics.shape[0] > 1
         basename    = os.path.splitext(os.path.basename(kin_file))[0]
 

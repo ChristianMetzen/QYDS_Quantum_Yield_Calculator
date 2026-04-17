@@ -4,6 +4,48 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
 
+def read_UV_Vis_csv(file=None):
+    
+    if not file:
+        return
+
+    with open(file, 'r', encoding='utf-8', errors='replace') as f:
+        lines = []
+        for line in f:
+            stripped = line.strip()
+            if stripped == "":
+                break
+            lines.append(line)
+
+    from io import StringIO
+    df = pd.read_csv(
+        StringIO("".join(lines)),
+        header=None,
+        na_values=["", " "],
+        engine='python',
+    )
+
+    # Spektren-Namen aus Zeile 0 (jede gerade Spalte)
+    spectrum_names = df.iloc[0, ::2].dropna().tolist()
+
+    # Ab Zeile 2, nur numerische Zeilen (Sicherheitsnetz)
+    data = df.iloc[2:].copy()
+    numeric_mask = pd.to_numeric(data.iloc[:, 0], errors='coerce').notna()
+    data = data[numeric_mask].reset_index(drop=True)
+
+    # Alle Wellenlängen- und Absorbanzspalten paarweise zusammenbauen
+    frames = []
+    for i, name in enumerate(spectrum_names):
+        wl_col = i * 2
+        abs_col = i * 2 + 1
+        pair = data.iloc[:, [wl_col, abs_col]].astype(float)
+        pair.columns = [f"Wavelength {name} (nm)", name]
+        frames.append(pair)
+
+    result = pd.concat(frames, axis=1)
+
+    return result
+
 def choose_file(tree):
     file_path = filedialog.askopenfilename(
         filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
@@ -11,18 +53,12 @@ def choose_file(tree):
     if not file_path:
         return
 
-    df = pd.read_csv(file_path, skip_blank_lines=False)
+    df = read_UV_Vis_csv(file_path)
+    if df is None:
+        return
 
-    # Auto-detect first empty row
-    empty_row_mask = df.replace("", np.nan).isna().all(axis=1)
-    if empty_row_mask.any():
-        last_row_with_data = empty_row_mask.idxmax()
-    else:
-        last_row_with_data = len(df)
-
-    df_original = df.iloc[0:last_row_with_data]  # skip header + empty rows
-    update_table(df_original, tree)
-    return df_original
+    update_table(df, tree)
+    return df
 
 def save_csv(tree):
     cols = tree["columns"]
