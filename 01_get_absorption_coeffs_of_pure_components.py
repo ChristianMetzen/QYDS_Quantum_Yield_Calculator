@@ -169,45 +169,51 @@ def run_gui():
     # =========================
     control_frame = ttk.Frame(root, padding=10)
     control_frame.pack(side="left", fill="y")
+    control_frame.grid_columnconfigure(0, weight=1)
 
     plot_frame = ttk.Frame(root, padding=10)
     plot_frame.pack(side="right", fill="both", expand=True)
 
-    # ---- File ----
-    ttk.Label(control_frame, text="UV-Vis spectrum thermal equilibrium").grid(row=0, column=0, sticky="w")
-    ttk.Entry(control_frame, textvariable=file_teq_var, width=40).grid(row=1, column=0, pady=2)
-    ttk.Button(control_frame, text="Select UV-Vis spectrum thermal equilibrium", command=lambda: choose_file(file_teq_var)).grid(row=1, column=1, padx=5)
+    # ---- File A ----
+    ttk.Label(control_frame, text="UV-Vis spectrum A (time point A)").grid(row=0, column=0, sticky="w")
+    ttk.Entry(control_frame, textvariable=file_teq_var, width=60).grid(row=1, column=0, pady=2, sticky="ew")
+    ttk.Button(control_frame, text="Browse", command=lambda: choose_file(file_teq_var), width=10).grid(row=1, column=1, padx=5)
 
-    # ---- File ----
-    ttk.Label(control_frame, text="UV-Vis file PSS").grid(row=2, column=0, sticky="w")
-    ttk.Entry(control_frame, textvariable=file_PSS_var, width=40).grid(row=3, column=0, pady=2)
-    ttk.Button(control_frame, text="Select UV-Vis file PSS", command=lambda: choose_file(file_PSS_var)).grid(row=3, column=1, padx=5)
+    # ---- File B ----
+    ttk.Label(control_frame, text="UV-Vis spectrum B (time point B)").grid(row=2, column=0, sticky="w")
+    ttk.Entry(control_frame, textvariable=file_PSS_var, width=60).grid(row=3, column=0, pady=2, sticky="ew")
+    ttk.Button(control_frame, text="Browse", command=lambda: choose_file(file_PSS_var), width=10).grid(row=3, column=1, padx=5)
 
     # ---- Total concentration ----
-    ttk.Label(control_frame, text="Total concentration c(tot) / uM").grid(row=4, column=0, sticky="w", pady=(10, 0))
+    ttk.Label(control_frame, text="Total concentration c(tot) / µM").grid(row=4, column=0, sticky="w", pady=(10, 0))
     ttk.Entry(control_frame, textvariable=ctot_var, width=15).grid(row=5, column=0, sticky="w")
 
+    # ---- Note on Component B ----
+    ttk.Label(control_frame,
+              text="Note: Component B is defined as the species predominant at time point B.",
+              foreground="gray").grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 2))
+
     # ---- x(teq) ----
-    ttk.Label(control_frame, text="Percentage Component B in thermal equilibrium").grid(row=6, column=0, sticky="w", pady=(10, 0))
-    ttk.Entry(control_frame, textvariable=x_teq_var, width=15).grid(row=7, column=0, sticky="w")
+    ttk.Label(control_frame, text="Percentage of Component B at time point A / %").grid(row=7, column=0, sticky="w", pady=(4, 0))
+    ttk.Entry(control_frame, textvariable=x_teq_var, width=15).grid(row=8, column=0, sticky="w")
 
     # ---- x(PSS) ----
-    ttk.Label(control_frame, text="Percentage Component B in PSS").grid(row=8, column=0, sticky="w", pady=(10, 0))
-    ttk.Entry(control_frame, textvariable=x_PSS_var, width=15).grid(row=9, column=0, sticky="w")
+    ttk.Label(control_frame, text="Percentage of Component B at time point B / %").grid(row=9, column=0, sticky="w", pady=(4, 0))
+    ttk.Entry(control_frame, textvariable=x_PSS_var, width=15).grid(row=10, column=0, sticky="w")
 
     # ---- Component names ----
-    ttk.Label(control_frame, text="Component A name").grid(row=10, column=0, sticky="w", pady=(10, 0))
-    ttk.Entry(control_frame, textvariable=name1_var, width=20).grid(row=11, column=0)
+    ttk.Label(control_frame, text="Component A name").grid(row=11, column=0, sticky="w", pady=(10, 0))
+    ttk.Entry(control_frame, textvariable=name1_var, width=20).grid(row=12, column=0)
 
-    ttk.Label(control_frame, text="Component B name").grid(row=12, column=0, sticky="w", pady=(10, 0))
-    ttk.Entry(control_frame, textvariable=name2_var, width=20).grid(row=13, column=0)
+    ttk.Label(control_frame, text="Component B name").grid(row=13, column=0, sticky="w", pady=(10, 0))
+    ttk.Entry(control_frame, textvariable=name2_var, width=20).grid(row=14, column=0)
 
     # ---- Buttons ----
     ttk.Button(control_frame, text="Run Analysis", command=run_analysis)\
-        .grid(row=14, column=0, pady=(20, 5), sticky="ew")
+        .grid(row=15, column=0, pady=(20, 5), sticky="ew")
 
     ttk.Button(control_frame, text="Save Results", command=save_results)\
-        .grid(row=15, column=0, sticky="ew")
+        .grid(row=16, column=0, sticky="ew")
 
     # =========================
     # Plot canvas
