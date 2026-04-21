@@ -12,13 +12,12 @@ def read_UV_Vis_csv(file=None):
     if not file:
         return
 
-    # Lese roh ein und schneide bei erster Leerzeile ab
     with open(file, 'r', encoding='utf-8', errors='replace') as f:
         lines = []
         for line in f:
             stripped = line.strip()
             if stripped == "":
-                break  # Erste Leerzeile = Ende der Spektrendaten
+                break
             lines.append(line)
 
     from io import StringIO
@@ -29,15 +28,12 @@ def read_UV_Vis_csv(file=None):
         engine='python',
     )
 
-    # Spektren-Namen aus Zeile 0 (jede gerade Spalte)
     spectrum_names = df.iloc[0, ::2].dropna().tolist()
 
-    # Ab Zeile 2, nur numerische Zeilen (Sicherheitsnetz)
     data = df.iloc[2:].copy()
     numeric_mask = pd.to_numeric(data.iloc[:, 0], errors='coerce').notna()
     data = data[numeric_mask]
 
-    # Wellenlänge + Absorbanzspalten zusammenbauen
     wavelengths = data.iloc[:, 0].astype(float).reset_index(drop=True)
     absorbances = data.iloc[:, 1::2].astype(float).reset_index(drop=True)
 
@@ -92,10 +88,9 @@ def build_kinetics_df_kinetics(kinetics_file, uv_vis_start_file, irradiation_wav
     """Build single-row kinetics DataFrame from a kinetics trace + initial UV-Vis."""
 
     df         = read_UV_Vis_csv(kinetics_file).T
-    absorbance = df.iloc[1, :-1].astype(float).to_numpy().copy()  # .copy() avoids read-only error on transposed array
+    absorbance = df.iloc[1, :-1].astype(float).to_numpy().copy()
     times      = df.iloc[0, :-1].astype(float)
 
-    # Baseline correction from initial UV-Vis
     df_init = read_UV_Vis_csv(uv_vis_start_file)
     wl_idx  = (df_init.iloc[:, 0] - irradiation_wavelength).abs().idxmin()
     A_ini   = df_init.iloc[wl_idx, 1]
@@ -105,6 +100,21 @@ def build_kinetics_df_kinetics(kinetics_file, uv_vis_start_file, irradiation_wav
     df_kinetics = pd.DataFrame(data=[absorbance], columns=times.astype(str))
     df_kinetics.insert(0, 'wavelength / nm', irradiation_wavelength)
     return df_kinetics
+
+
+def detect_spike_columns(df, threshold=0.05):
+    """
+    Returns list of column names (timestamps) where a spike is detected.
+    Uses the second derivative of absorbance; spikes cause sharp local extrema.
+    threshold: max allowed abs(second derivative). Tune as needed.
+    """
+    spike_cols = []
+    for col in df.columns[1:]:
+        y  = df[col].to_numpy(dtype=float)
+        d2 = np.diff(y, n=2)
+        if np.max(np.abs(d2)) > threshold:
+            spike_cols.append(col)
+    return spike_cols
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,10 +165,10 @@ def run_gui():
         ttk.Entry(f, textvariable=var).grid(row=0, column=0, sticky="ew", padx=(0,5))
         ttk.Button(f, text="Browse", command=lambda: choose_file(var)).grid(row=0, column=1)
 
-    var_uv_mult   = tk.StringVar()
-    var_qyds      = tk.StringVar()
-    var_kinetics  = tk.StringVar()
-    var_uv_start  = tk.StringVar()
+    var_uv_mult  = tk.StringVar()
+    var_qyds     = tk.StringVar()
+    var_kinetics = tk.StringVar()
+    var_uv_start = tk.StringVar()
 
     file_row(file_frame, "UV-Vis file (Multiple Spectra)",             var_uv_mult,  0)
     file_row(file_frame, "QYDS .dat file (Multiple Spectra, manual)",  var_qyds,     1)
@@ -170,41 +180,45 @@ def run_gui():
     param_frame.grid(row=2, column=0, sticky="ew", **pad)
     param_frame.grid_columnconfigure(1, weight=1)
 
-    var_wl    = tk.StringVar(value='365')
-    var_mode  = tk.StringVar(value='manual')
-    var_start = tk.StringVar(value='0')
-    var_step  = tk.StringVar(value='30')
+    var_wl        = tk.StringVar(value='365')
+    var_mode      = tk.StringVar(value='manual')
+    var_start     = tk.StringVar(value='0')
+    var_step      = tk.StringVar(value='30')
+    var_threshold = tk.StringVar(value='0.1')  # ← default changed
 
     ttk.Label(param_frame, text="Irradiation wavelength / nm:").grid(row=0, column=0, sticky="w", pady=2)
     ttk.Entry(param_frame, textvariable=var_wl, width=12).grid(row=0, column=1, sticky="w", padx=5)
 
-    ttk.Label(param_frame, text="Manual / Auto (Multiple Spectra):").grid(row=1, column=0, sticky="w", pady=2)
+    ttk.Label(param_frame, text="Spike threshold (2nd deriv.):").grid(row=1, column=0, sticky="w", pady=2)  # ← row 1
+    ttk.Entry(param_frame, textvariable=var_threshold, width=10).grid(row=1, column=1, sticky="w", padx=5)
+
+    ttk.Label(param_frame, text="Manual / Auto (Multiple Spectra):").grid(row=2, column=0, sticky="w", pady=2)  # ← row 2
     ttk.Combobox(
         param_frame, textvariable=var_mode,
         values=['manual', 'auto'], state='readonly', width=10
-    ).grid(row=1, column=1, sticky="w", padx=5)
+    ).grid(row=2, column=1, sticky="w", padx=5)
 
-    # Auto time entries — shown/hidden based on mode
-    auto_labels = ["Start / s", "Step / s"]
-    auto_vars   = [var_start, var_step]
-    auto_rows   = []
-    for i, (lbl, var) in enumerate(zip(auto_labels, auto_vars)):
-        l = ttk.Label(param_frame, text=lbl + ":")
-        e = ttk.Entry(param_frame, textvariable=var, width=10)
-        auto_rows.append((l, e, i + 2))
+    auto_label_start = ttk.Label(param_frame, text="Start / s:")
+    auto_entry_start = ttk.Entry(param_frame, textvariable=var_start, width=10)
+    auto_label_step  = ttk.Label(param_frame, text="Step / s:")
+    auto_entry_step  = ttk.Entry(param_frame, textvariable=var_step, width=10)
 
+    auto_rows = [
+        (auto_label_start, auto_entry_start, 3),  # ← row 3
+        (auto_label_step,  auto_entry_step,  4),  # ← row 4
+    ]
     def update_auto_rows(*_):
         if var_mode.get() == 'auto':
-            for l, e, row in auto_rows:
-                l.grid(row=row, column=0, sticky="w", pady=2)
-                e.grid(row=row, column=1, sticky="w", padx=5)
+            for lbl, ent, row in auto_rows:
+                lbl.grid(row=row, column=0, sticky="w", pady=2)
+                ent.grid(row=row, column=1, sticky="w", padx=5)
         else:
-            for l, e, _ in auto_rows:
-                l.grid_remove()
-                e.grid_remove()
+            for lbl, ent, _ in auto_rows:
+                lbl.grid_remove()
+                ent.grid_remove()
 
     var_mode.trace_add('write', update_auto_rows)
-    update_auto_rows()  # initialize
+    update_auto_rows()  # initialise visibility
 
     # ── Output ───────────────────────────────────────────────────────────────
     out_frame = ttk.LabelFrame(root, text="Output", padding=8)
@@ -255,6 +269,12 @@ def run_gui():
             messagebox.showerror("Input error", "Irradiation wavelength must be a number.")
             return
 
+        try:
+            threshold = float(var_threshold.get())
+        except ValueError:
+            messagebox.showerror("Input error", "Spike threshold must be a number.")
+            return
+
         out_folder = var_out_folder.get().strip()
         out_name   = var_out_name.get().strip()
         if not out_folder or not os.path.isdir(out_folder):
@@ -302,6 +322,24 @@ def run_gui():
                 log(f"Initial UV-Vis    : {os.path.basename(start_file)}")
                 log(f"Irradiation wl    : {wl} nm")
                 df = build_kinetics_df_kinetics(kin_file, start_file, wl)
+
+            # ── Spike removal (last step, timestamps already set) ─────────────
+            spike_cols = detect_spike_columns(df, threshold=threshold)
+            if spike_cols:
+                log(f"Spikes detected in {len(spike_cols)} spectrum/a — removing:", color='orange')
+                for c in spike_cols:
+                    log(f"  t = {c} s", color='orange')
+
+                # Save removed spectra for manual inspection
+                df_spikes  = df[['wavelength / nm'] + spike_cols]
+                spike_name = os.path.splitext(out_name)[0] + '_removed_spectra.csv'
+                spike_path = os.path.join(out_folder, spike_name)
+                df_spikes.to_csv(spike_path, index=False)
+                log(f"Removed spectra → {os.path.basename(spike_path)}", color='orange')
+
+                df = df.drop(columns=spike_cols)
+            else:
+                log("No spikes detected.", color='green')
 
             df.to_csv(out_path, index=False)
             log(f"Shape            : {df.shape[0]} rows × {df.shape[1]} columns (incl. wavelength)", color='green')
