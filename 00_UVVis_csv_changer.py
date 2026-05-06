@@ -80,22 +80,10 @@ def delete_spectra_from_df(df, cols_to_delete_start):
 
 
 def save_df_as_csv(df, file_path, line_ending=b'\r\r\n', n_raw_cols=None):
-    """
-    Saves the DataFrame back in the exact original format:
-    - original line ending (e.g. \r\r\n)
-    - same total number of comma-separated fields as the original
-      (pads with trailing commas so downstream scripts stay happy)
-    """
     out_lines = []
     for _, row in df.iterrows():
         fields = list(row.astype(str))
         line_str = ",".join(fields)
-        # Pad to original column count with trailing commas
-        if n_raw_cols is not None:
-            current_commas = len(fields) - 1
-            trailing = n_raw_cols - 1 - current_commas
-            if trailing > 0:
-                line_str += "," * trailing
         out_lines.append(line_str.encode('utf-8') + line_ending)
 
     with open(file_path, 'wb') as f:
