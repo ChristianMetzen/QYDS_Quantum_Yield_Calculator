@@ -121,6 +121,10 @@ class App:
         ttk.Button(bar, text="🗑  Delete selected columns", command=self.delete_selected).pack(side=tk.LEFT, padx=4)
         ttk.Button(bar, text="💾  Save as …", command=self.save_file).pack(side=tk.LEFT, padx=4)
 
+        ttk.Separator(bar, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=4)
+        ttk.Button(bar, text="☑  Select all", command=self.select_all).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bar, text="☐  Deselect all", command=self.deselect_all).pack(side=tk.LEFT, padx=4)
+
         self.status_var = tk.StringVar(value="No file loaded.")
         ttk.Label(bar, textvariable=self.status_var, foreground="gray").pack(side=tk.LEFT, padx=12)
 
@@ -182,9 +186,6 @@ class App:
             messagebox.showinfo("Nothing selected", "Check at least one spectrum to delete.")
             return
         names = [name for col, name in spectra if col in to_delete]
-        if not messagebox.askyesno("Confirm delete",
-                                   f"Delete these spectra?\n\n" + "\n".join(names)):
-            return
         self.df = delete_spectra_from_df(self.df, to_delete)
         self._refresh_checkboxes()
         self._refresh_table()
@@ -203,6 +204,14 @@ class App:
             return
         save_df_as_csv(self.df, path, self.line_ending, self.n_raw_cols)
         self.status_var.set(f"Saved to: {path.split('/')[-1]}")
+
+    def select_all(self):
+        for var in self.check_vars.values():
+            var.set(True)
+
+    def deselect_all(self):
+        for var in self.check_vars.values():
+            var.set(False)
 
     # -----------------------------------------------------------------------
     # UI refresh helpers
