@@ -157,6 +157,7 @@ def run_gui():
 
         ax.plot(df_abs.iloc[:, 0], df_abs.iloc[:, 1], label=df_abs.columns[1])
         ax.plot(df_abs.iloc[:, 0], df_abs.iloc[:, 2], label=df_abs.columns[2])
+        ax.axhline(0, color='gray', ls='--')
 
         ax.set_xlabel("wavelength / nm")
         ax.set_ylabel("absorption coefficient / L mol⁻¹ cm⁻¹")
