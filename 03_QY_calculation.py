@@ -102,27 +102,71 @@ def calculate_photon_flux(params):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def calculate_concentration_profile(params):
-    """Convert absorbance vs time into concentration profiles using absorption coefficients."""
+    """Convert absorbance vs time into concentration profiles using absorption coefficients.
+
+    For spectra series: uses the same weighted analytical formula as the E-step
+    in the microgel iterative fit:
+        x_B(lambda) = (A(lambda) - c*eps_A(lambda)) / (c*(eps_B - eps_A)(lambda))
+    averaged over [Concentration WL min, Concentration WL max],
+    weighted by |eps_B - eps_A|, clipped to [0, 1].
+    For single-wavelength kinetics: falls back to the analytical single-point formula.
+    """
+    from scipy.interpolate import interp1d as _interp1d
+
     df_kinetics  = params['Kinetics df']
     df_abs_coeff = params['Abs coeff df']
     c            = params['Concentration']
-    wl           = params['Irradiation wavelength']
+    wl_min       = params['Concentration WL min']
+    wl_max       = params['Concentration WL max']
     time         = df_kinetics.columns[1:].astype(float).to_numpy()
     has_spectra  = params['Has spectra']
 
-    if has_spectra:
-        wl_idx_coeff = (df_abs_coeff.iloc[:, 0] - wl).abs().argmin()
-        wl_idx_abs   = (df_kinetics.iloc[:, 0] - wl).abs().argmin()
-        e_A = df_abs_coeff.iloc[wl_idx_coeff, 1]
-        e_B = df_abs_coeff.iloc[wl_idx_coeff, 2]
-        absorbance = df_kinetics.iloc[wl_idx_abs, 1:].to_numpy(dtype=float)
-    else:
-        wl_idx = (df_abs_coeff.iloc[:, 0] - wl).abs().argmin()
-        e_A = df_abs_coeff.iloc[wl_idx, 1]
-        e_B = df_abs_coeff.iloc[wl_idx, 2]
-        absorbance = df_kinetics.iloc[0, 1:].to_numpy(dtype=float)
+    wl_eps = df_abs_coeff.iloc[:, 0].to_numpy(dtype=float)
+    eps_A  = df_abs_coeff.iloc[:, 1].to_numpy(dtype=float)
+    eps_B  = df_abs_coeff.iloc[:, 2].to_numpy(dtype=float)
 
-    x_B = np.clip((absorbance - c * e_A) / (c * (e_B - e_A)), 0, 1)
+    if has_spectra:
+        wl_obs = df_kinetics.iloc[:, 0].to_numpy(dtype=float)
+
+        wl_lo  = max(wl_obs.min(), wl_eps.min(), wl_min)
+        wl_hi  = min(wl_obs.max(), wl_eps.max(), wl_max)
+        wl_fit = wl_obs[(wl_obs >= wl_lo) & (wl_obs <= wl_hi)]
+
+        eps_A_fit = _interp1d(wl_eps, eps_A, kind='cubic',
+                               fill_value='extrapolate')(wl_fit)
+        eps_B_fit = _interp1d(wl_eps, eps_B, kind='cubic',
+                               fill_value='extrapolate')(wl_fit)
+
+        delta_eps = eps_B_fit - eps_A_fit
+        weight    = np.abs(delta_eps)
+
+        x_B_arr         = []
+        absorbance_list = []
+        for col_idx in range(1, df_kinetics.shape[1]):
+            A = _interp1d(wl_obs, df_kinetics.iloc[:, col_idx].to_numpy(dtype=float),
+                          kind='linear', bounds_error=False,
+                          fill_value=np.nan)(wl_fit)
+            num    = A - c * eps_A_fit
+            den    = c * delta_eps
+            x_wl   = np.where(np.abs(den) > 1e-12, num / den, np.nan)
+            x_clip = np.clip(x_wl, 0, 1)
+            fin    = np.isfinite(x_clip)
+            x_B_arr.append(
+                float(np.average(x_clip[fin], weights=weight[fin]))
+                if fin.any() else np.nan
+            )
+            absorbance_list.append(np.nanmean(A))
+
+        x_B        = np.clip(np.array(x_B_arr), 0, 1)
+        absorbance = np.array(absorbance_list)
+
+    else:
+        mask_eps   = (wl_eps >= wl_min) & (wl_eps <= wl_max)
+        e_A        = float(np.nanmean(eps_A[mask_eps]))
+        e_B        = float(np.nanmean(eps_B[mask_eps]))
+        absorbance = df_kinetics.iloc[0, 1:].to_numpy(dtype=float)
+        x_B        = np.clip((absorbance - c * e_A) / (c * (e_B - e_A)), 0, 1)
+
     x_A = 1 - x_B
 
     if x_A[0] >= x_A[-1]:
@@ -140,6 +184,38 @@ def calculate_concentration_profile(params):
     return params
 
 
+def report_cis_fraction(params):
+    """Print and log the cis and trans fractions at t=0 and at PSS (last time point)."""
+    print_func = params['Print function']
+    logger     = params['logger']
+    df_conc    = params['Conc df']
+    names      = params['Names']   # names[0] = dominant at t=0, names[1] = builds up under irradiation
+
+    c_A = df_conc['c_A / uM'].to_numpy()
+    c_B = df_conc['c_B / uM'].to_numpy()
+    c_total = c_A + c_B
+
+    # Always report both cis and trans fractions with fixed labels.
+    # names[0] is the species dominant at t=0; names[1] builds up.
+    # We identify which name contains 'cis' or 'trans' to assign labels correctly.
+    name_A, name_B = names[0], names[1]
+    frac_A_initial = c_A[0]  / c_total[0]  * 100
+    frac_B_initial = c_B[0]  / c_total[0]  * 100
+    frac_A_pss     = c_A[-1] / c_total[-1] * 100
+    frac_B_pss     = c_B[-1] / c_total[-1] * 100
+
+    print_func(f"Fraction {name_A} at t=0  : {frac_A_initial:.1f} %")
+    print_func(f"Fraction {name_B} at t=0  : {frac_B_initial:.1f} %")
+    print_func(f"Fraction {name_A} at PSS  : {frac_A_pss:.1f} %")
+    print_func(f"Fraction {name_B} at PSS  : {frac_B_pss:.1f} %")
+    logger.info(f"{name_A} fraction — t=0: {frac_A_initial:.2f} %, PSS: {frac_A_pss:.2f} %")
+    logger.info(f"{name_B} fraction — t=0: {frac_B_initial:.2f} %, PSS: {frac_B_pss:.2f} %")
+
+    params['Cis fraction initial'] = frac_B_initial if 'cis' in name_B.lower() else frac_A_initial
+    params['Cis fraction PSS']     = frac_B_pss     if 'cis' in name_B.lower() else frac_A_pss
+    return params
+
+
 def ladanyi_fit(params):
     """Fit concentration profiles to the Ladányi ODE model to extract quantum yields."""
     print_func = params['Print function']
@@ -151,27 +227,49 @@ def ladanyi_fit(params):
     names      = params['Names']
 
     wl_idx = (df_abs_coeff.iloc[:, 0] - params['Irradiation wavelength']).abs().argmin()
-    e_A = df_abs_coeff.iloc[wl_idx, 1]
-    e_B = df_abs_coeff.iloc[wl_idx, 2]
+    # e_A and e_B must correspond to the SAME species as c_A and c_B.
+    # calculate_concentration_profile may swap the columns so that c_A is always
+    # the species that decreases; params['Names'] records which original column
+    # each corresponds to. Look up eps by species name, not by fixed column index.
+    _coeff_cols = list(df_abs_coeff.columns)
+    e_A = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[0])])
+    e_B = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[1])])
 
     c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
     c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
     times = df_conc['time / s'].to_numpy()
     cA0, cB0 = c_A[0], c_B[0]
 
-    # Linear least-squares pre-estimate for initial guess
+    # Linear least-squares pre-estimate for initial guess.
+    # Derived directly from the ODE so the units match exactly:
+    #   dcA/dt = P * (phi_B*cB*eB - phi_A*cA*eA),
+    #   P = I0/(V*NA) * (1 - 10^-A_tot)/A_tot   (same prefactor as dcA_dt below)
+    # Discretising dcA/dt ≈ ΔcA/Δt and evaluating P, cA, cB at interval midpoints
+    # gives a linear system in [phi_A, phi_B]:
+    #   ΔcA/Δt = (-P_m*eA*cA_m) * phi_A + (P_m*eB*cB_m) * phi_B
     dc_A  = np.diff(c_A)
     dt    = np.diff(times)
-    dQ    = I0 * dt
     c_A_m = 0.5 * (c_A[:-1] + c_A[1:])
     c_B_m = 0.5 * (c_B[:-1] + c_B[1:])
     A_m   = e_A * c_A_m + e_B * c_B_m
-    y     = V * dc_A / dQ
-    alpha = (1 / constants.Avogadro) * (1 - 10**(-A_m)) / A_m
-    X     = np.column_stack([alpha * c_B_m * e_B, -alpha * c_A_m * e_A])
+
+    # Prefactor P evaluated at the midpoints — identical grouping to the ODE
+    with np.errstate(divide='ignore', invalid='ignore'):
+        P_m = (I0 / (V * constants.Avogadro)) * (1 - 10**(-A_m)) / A_m
+
+    dcA_dt_meas = dc_A / dt                       # measured rate of change
+    X = np.column_stack([-P_m * e_A * c_A_m,      # coefficient of phi_A
+                          P_m * e_B * c_B_m])     # coefficient of phi_B
+    y = dcA_dt_meas
+
     finite_mask = np.isfinite(y) & np.isfinite(X).all(axis=1)
     Phi_est, *_ = np.linalg.lstsq(X[finite_mask], y[finite_mask], rcond=None)
-    initial_guess = [Phi_est[1], Phi_est[0]]
+    # Clip the pre-estimate to physically plausible quantum yields [0, 1]
+    phi_A_guess = float(np.clip(Phi_est[0], 0.0, 1.0))
+    phi_B_guess = float(np.clip(Phi_est[1], 0.0, 1.0))
+    initial_guess = [phi_A_guess, phi_B_guess]
+    print_func(f"Pre-estimate: \u03a6({names[0]}\u2192{names[1]})\u2248{phi_A_guess:.3f}, "
+               f"\u03a6({names[1]}\u2192{names[0]})\u2248{phi_B_guess:.3f}")
 
     def dcA_dt(t, y, phi_A, phi_B):
         cA, cB = y
@@ -190,9 +288,10 @@ def ladanyi_fit(params):
     popt, _ = curve_fit(model, times, c_A, p0=initial_guess)
     phi_A_fit, phi_B_fit = popt
 
-    print_func(f"\u03a6({names[0]}\u2192{names[1]}) = {phi_A_fit:.4e}")
-    print_func(f"\u03a6({names[1]}\u2192{names[0]}) = {phi_B_fit:.4e}")
-    logger.info(f'QY {names[0]}->{names[1]} = {phi_A_fit:.4e}, {names[1]}->{names[0]} = {phi_B_fit:.4e}')
+    print_func(f"\u03a6({names[0]}\u2192{names[1]}) = {phi_A_fit:.4e}  ({phi_A_fit*100:.2f} %)")
+    print_func(f"\u03a6({names[1]}\u2192{names[0]}) = {phi_B_fit:.4e}  ({phi_B_fit*100:.2f} %)")
+    logger.info(f'QY {names[0]}->{names[1]} = {phi_A_fit:.4e} ({phi_A_fit*100:.2f} %), '
+                f'{names[1]}->{names[0]} = {phi_B_fit:.4e} ({phi_B_fit*100:.2f} %)')
 
     params['Ladanyi QY A->B'] = phi_A_fit
     params['Ladanyi QY B->A'] = phi_B_fit
@@ -200,6 +299,56 @@ def ladanyi_fit(params):
     cA_fit = model(times, phi_A_fit, phi_B_fit)
     pd.DataFrame({'time / s': times, 'cA exp': c_A, 'cA fit': cA_fit}).to_csv(
         os.path.join(params['Results Folder'], f"{params['Basename']}_ladanyi_fit.csv"), index=False)
+
+    # ── Photons required to reach the PSS ─────────────────────────────────────
+    # Integrate the fitted ODE on a fine grid far beyond the measured window to
+    # find the asymptotic (PSS) composition, then determine the time at which the
+    # system first comes within PSS_TOL of that asymptote.
+    PSS_TOL = 0.01   # fraction of the total change remaining (1 %)
+
+    # Integrate well past the last measured time to approximate the true PSS
+    t_long = np.linspace(times[0], times[-1] * 20, 20000)
+    sol_long = solve_ivp(dcA_dt, (t_long[0], t_long[-1]), y0=[cA0, cB0],
+                         t_eval=t_long, args=(phi_A_fit, phi_B_fit), method="LSODA")
+    cA_long = sol_long.y[0]
+    cB_long = sol_long.y[1]
+    cA_pss  = cA_long[-1]   # asymptotic c_A at PSS
+
+    # Time to reach PSS: first time |cA(t) - cA_pss| <= PSS_TOL * |cA_pss - cA0|
+    total_change = abs(cA_pss - cA0)
+    if total_change > 0:
+        within = np.abs(cA_long - cA_pss) <= PSS_TOL * total_change
+        idx_pss = np.argmax(within) if within.any() else len(t_long) - 1
+        t_pss   = t_long[idx_pss]
+    else:
+        t_pss = 0.0
+
+    # Incident photons up to t_pss
+    Q_incident = I0 * t_pss   # photons s^-1 * s = photons (since I0 = Abs photon flux in s^-1)
+
+    # Absorbed photons up to t_pss: integrate q_abs(t) = I0 * (1 - 10^-A_tot(t)) dt
+    mask_pss   = t_long <= t_pss
+    A_tot_long = cA_long * e_A + cB_long * e_B
+    q_abs_t    = I0 * (1 - 10.0**(-A_tot_long))
+    Q_absorbed = np.trapz(q_abs_t[mask_pss], t_long[mask_pss])
+
+    # Express also in mol of photons (einstein)
+    Q_incident_mol = Q_incident / constants.Avogadro
+    Q_absorbed_mol = Q_absorbed / constants.Avogadro
+
+    x_A_pss = cA_pss / (cA_pss + (cA0 + cB0 - cA_pss))  # = cA_pss / (cA0+cB0)
+
+    print_func(f"\nPSS reached at t = {t_pss:.1f} s  (within {PSS_TOL*100:.0f} % of asymptote)")
+    print_func(f"  Incident photons to PSS: {Q_incident:.3e}  ({Q_incident_mol:.3e} mol)")
+    print_func(f"  Absorbed photons to PSS: {Q_absorbed:.3e}  ({Q_absorbed_mol:.3e} mol)")
+    logger.info(f"PSS at t={t_pss:.2f} s; Q_incident={Q_incident:.4e} ({Q_incident_mol:.4e} mol), "
+                f"Q_absorbed={Q_absorbed:.4e} ({Q_absorbed_mol:.4e} mol)")
+
+    params['t_PSS / s']           = t_pss
+    params['Q_incident_to_PSS']   = Q_incident
+    params['Q_absorbed_to_PSS']   = Q_absorbed
+    params['Q_incident_mol']      = Q_incident_mol
+    params['Q_absorbed_mol']      = Q_absorbed_mol
 
     return params
 
@@ -210,6 +359,7 @@ def run_analysis(params):
     logger.info('Starting Ladányi QY analysis')
     logger.info(f"Irradiation: {params['Irradiation wavelength']} nm, "
                 f"channel: {params['Channel']}, voltage: {params['Voltage after ref']} V")
+    logger.info(f"Concentration WL range: {params['Concentration WL min']}-{params['Concentration WL max']} nm")
     logger.info(f"Volume: {params['Volume']} mL, concentration: {params['Concentration']*1e6:.1f} µM")
 
     calculate_photon_flux(params)
@@ -218,6 +368,7 @@ def run_analysis(params):
     params['Abs coeff df'] = df_abs_coeff
 
     calculate_concentration_profile(params)
+    report_cis_fraction(params)
     ladanyi_fit(params)
     return params
 
@@ -263,8 +414,13 @@ def plotting_conc_and_fit(params, ax):
     t_max        = params['Plotting t_max']
 
     wl_idx = (df_abs_coeff.iloc[:, 0] - params['Irradiation wavelength']).abs().argmin()
-    e_A = df_abs_coeff.iloc[wl_idx, 1]
-    e_B = df_abs_coeff.iloc[wl_idx, 2]
+    # e_A and e_B must correspond to the SAME species as c_A and c_B.
+    # calculate_concentration_profile may swap the columns so that c_A is always
+    # the species that decreases; params['Names'] records which original column
+    # each corresponds to. Look up eps by species name, not by fixed column index.
+    _coeff_cols = list(df_abs_coeff.columns)
+    e_A = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[0])])
+    e_B = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[1])])
 
     c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
     c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
@@ -342,21 +498,21 @@ def run_gui():
     root.grid_rowconfigure(0, weight=1)
 
     # ── Helpers ──────────────────────────────────────────────────────────────
-    def choose_file(var):
-        path = filedialog.askopenfilename(filetypes=[("All files", "*.*")])
+    def choose_file(var, title="Open file"):
+        path = filedialog.askopenfilename(title=title, filetypes=[("All files", "*.*")])
         if path: var.set(path)
 
     def choose_folder(var):
         path = filedialog.askdirectory()
         if path: var.set(path)
 
-    def file_row(parent, label, var, row):
+    def file_row(parent, label, var, row, title="Open file"):
         ttk.Label(parent, text=label).grid(row=row*2, column=0, sticky="w", pady=(6,0))
         f = ttk.Frame(parent)
         f.grid(row=row*2+1, column=0, sticky="ew", pady=2)
         f.grid_columnconfigure(0, weight=1)
         ttk.Entry(f, textvariable=var).grid(row=0, column=0, sticky="ew", padx=(0,4))
-        ttk.Button(f, text="Browse", command=lambda: choose_file(var), width=7).grid(row=0, column=1)
+        ttk.Button(f, text="Browse", command=lambda: choose_file(var, title), width=7).grid(row=0, column=1)
 
     # ── Left panel ───────────────────────────────────────────────────────────
     left = ttk.Frame(root, padding=10)
@@ -372,8 +528,8 @@ def run_gui():
     var_abs_coeff   = tk.StringVar()
     var_results     = tk.StringVar()
 
-    file_row(file_frame, "Kinetics DataFrame (CSV):",         var_kinetics,  0)
-    file_row(file_frame, "Absorption coefficients (CSV):",    var_abs_coeff, 1)
+    file_row(file_frame, "Kinetics DataFrame (CSV):",         var_kinetics,  0, "Open kinetics CSV")
+    file_row(file_frame, "Absorption coefficients (CSV):",    var_abs_coeff, 1, "Open absorption coefficients CSV")
 
     ttk.Label(file_frame, text="Results folder:").grid(row=4, column=0, sticky="w", pady=(6,0))
     f_res = ttk.Frame(file_frame)
@@ -388,6 +544,8 @@ def run_gui():
     param_frame.grid_columnconfigure(1, weight=1)
 
     var_wl      = tk.StringVar(value='325')
+    var_wl_conc_min = tk.StringVar(value='330')
+    var_wl_conc_max = tk.StringVar(value='380')
     var_voltage = tk.StringVar(value='7.465')
     var_volume  = tk.StringVar(value='3')
     var_conc    = tk.StringVar(value='40')
@@ -395,6 +553,8 @@ def run_gui():
 
     param_entries = [
         ("Irradiation wavelength / nm",      var_wl),
+        ("Concentration WL min / nm",         var_wl_conc_min),
+        ("Concentration WL max / nm",         var_wl_conc_max),
         ("Voltage after reference / V",       var_voltage),
         ("Volume / mL",                       var_volume),
         ("Concentration / µM",                var_conc),
@@ -403,9 +563,9 @@ def run_gui():
         ttk.Label(param_frame, text=lbl + ":").grid(row=i, column=0, sticky="w", pady=2, padx=(0,6))
         ttk.Entry(param_frame, textvariable=var, width=12).grid(row=i, column=1, sticky="w", padx=4)
 
-    ttk.Label(param_frame, text="Channel:").grid(row=4, column=0, sticky="w", pady=2, padx=(0,6))
+    ttk.Label(param_frame, text="Channel:").grid(row=6, column=0, sticky="w", pady=2, padx=(0,6))
     ttk.Combobox(param_frame, textvariable=var_channel, values=["low","high"],
-                 state="readonly", width=10).grid(row=4, column=1, sticky="w", padx=4)
+                 state="readonly", width=10).grid(row=6, column=1, sticky="w", padx=4)
 
     # Plotting parameters
     plot_frame = ttk.LabelFrame(left, text="Plot Parameters", padding=8)
@@ -453,6 +613,10 @@ def run_gui():
     canvas = FigureCanvasTkAgg(fig, master=right)
     canvas.get_tk_widget().grid(row=3, column=0, sticky="nsew", pady=(4,0))
 
+    def _float(s):
+        """Parse float accepting both '.' and ',' as decimal separator."""
+        return float(str(s).replace(',', '.'))
+
     # ── Run callback ─────────────────────────────────────────────────────────
     def run():
         output_box.delete("1.0", tk.END)
@@ -492,18 +656,20 @@ def run_gui():
             'Abs coeff file':       coeff_file,
             'Results Folder':       results_dir,
             'Basename':             basename,
-            'Irradiation wavelength': float(var_wl.get()),
-            'Voltage after ref':    float(var_voltage.get()),
-            'Volume':               float(var_volume.get()),
-            'Concentration':        float(var_conc.get()) * 1e-6,
+            'Irradiation wavelength':  _float(var_wl.get()),
+            'Concentration WL min':      _float(var_wl_conc_min.get()),
+            'Concentration WL max':      _float(var_wl_conc_max.get()),
+            'Voltage after ref':    _float(var_voltage.get()),
+            'Volume':               _float(var_volume.get()),
+            'Concentration':        _float(var_conc.get()) * 1e-6,
             'Channel':              var_channel.get(),
             'Color palette':        var_palette.get(),
-            'Plotting A_min':       float(var_A_min.get()),
-            'Plotting A_max':       float(var_A_max.get()),
-            'Plotting wl_min':      float(var_wl_min.get()),
-            'Plotting wl_max':      float(var_wl_max.get()),
-            'Plotting t_min':       float(var_t_min.get()),
-            'Plotting t_max':       float(var_t_max.get()),
+            'Plotting A_min':       _float(var_A_min.get()),
+            'Plotting A_max':       _float(var_A_max.get()),
+            'Plotting wl_min':      _float(var_wl_min.get()),
+            'Plotting wl_max':      _float(var_wl_max.get()),
+            'Plotting t_min':       _float(var_t_min.get()),
+            'Plotting t_max':       _float(var_t_max.get()),
         }
 
         printer(f"Kinetics df: {df_kinetics.shape[0]} row(s) × {df_kinetics.shape[1]} columns "
@@ -519,8 +685,21 @@ def run_gui():
             raise
 
     run_btn.config(command=run)
-    root.mainloop()
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            root.destroy()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
+    import tkinter as _tk_check
+    try:
+        _tk_check.Tk().destroy()
+    except Exception as _e:
+        print(f"Warning: could not initialise Tk ({_e}). Try restarting the Python kernel.")
     run_gui()
