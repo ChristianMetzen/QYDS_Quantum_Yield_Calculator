@@ -169,12 +169,10 @@ def calculate_concentration_profile(params):
 
     x_A = 1 - x_B
 
-    if x_A[0] >= x_A[-1]:
-        names = [df_abs_coeff.columns[1], df_abs_coeff.columns[2]]
-        c_A, c_B = x_A * c * 1e6, x_B * c * 1e6
-    else:
-        names = [df_abs_coeff.columns[2], df_abs_coeff.columns[1]]
-        c_A, c_B = x_B * c * 1e6, x_A * c * 1e6
+    # c_A always = column 1 species, c_B always = column 2 species.
+    # No swap — this keeps c_A/c_B consistent with e_A/e_B in the ODE.
+    names = [df_abs_coeff.columns[1], df_abs_coeff.columns[2]]
+    c_A, c_B = x_A * c * 1e6, x_B * c * 1e6
 
     df_conc = pd.DataFrame({'time / s': time, 'c_A / uM': c_A, 'c_B / uM': c_B})
     df_conc.to_csv(os.path.join(params['Results Folder'], f"{params['Basename']}_conc.csv"), index=False)
@@ -227,13 +225,9 @@ def ladanyi_fit(params):
     names      = params['Names']
 
     wl_idx = (df_abs_coeff.iloc[:, 0] - params['Irradiation wavelength']).abs().argmin()
-    # e_A and e_B must correspond to the SAME species as c_A and c_B.
-    # calculate_concentration_profile may swap the columns so that c_A is always
-    # the species that decreases; params['Names'] records which original column
-    # each corresponds to. Look up eps by species name, not by fixed column index.
-    _coeff_cols = list(df_abs_coeff.columns)
-    e_A = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[0])])
-    e_B = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[1])])
+    # c_A = column 1, c_B = column 2 — always, no swap.
+    e_A = float(df_abs_coeff.iloc[wl_idx, 1])
+    e_B = float(df_abs_coeff.iloc[wl_idx, 2])
 
     c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
     c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
@@ -414,13 +408,9 @@ def plotting_conc_and_fit(params, ax):
     t_max        = params['Plotting t_max']
 
     wl_idx = (df_abs_coeff.iloc[:, 0] - params['Irradiation wavelength']).abs().argmin()
-    # e_A and e_B must correspond to the SAME species as c_A and c_B.
-    # calculate_concentration_profile may swap the columns so that c_A is always
-    # the species that decreases; params['Names'] records which original column
-    # each corresponds to. Look up eps by species name, not by fixed column index.
-    _coeff_cols = list(df_abs_coeff.columns)
-    e_A = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[0])])
-    e_B = float(df_abs_coeff.iloc[wl_idx, _coeff_cols.index(names[1])])
+    # c_A = column 1, c_B = column 2 — always, no swap.
+    e_A = float(df_abs_coeff.iloc[wl_idx, 1])
+    e_B = float(df_abs_coeff.iloc[wl_idx, 2])
 
     c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
     c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
