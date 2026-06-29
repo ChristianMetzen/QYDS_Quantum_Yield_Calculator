@@ -73,6 +73,53 @@ CALIBRATION_DATA = {
 def get_correction_factor(wavelength, channel):
     return np.interp(wavelength, CALIBRATION_DATA['wavelength'], CALIBRATION_DATA[channel])
 
+
+# ── LED lookup table (nominal WL -> (central WL nm, FWHM nm)) ────────────────
+LED_CATALOGUE = {
+    "278 nm  (LG Innotek LEUVA66G00HV00)":  (280,  12),
+    "305 nm  (LG Innotek LEUVA66H100KU00)": (307,  13),
+    "325 nm  (Dowa EOLS-325-969)":           (328,  14),
+    "340 nm  (Seoul Viosys CUD4AF1B)":       (348,  10),
+    "365 nm  (Seoul Viosys CUN6GB1A)":       (370,   9),
+    "385 nm  (Seoul Viosys CUN8GF1A)":       (387,  10),
+    "400 nm  (Luxeon LHUV-0400-0450)":       (403,  11),
+    "415 nm  (Luxeon LHUV-0415-0600)":       (421,  13),
+    "420 nm  (Luxeon LHUV-0420-0650)":       (426,  13),
+    "425 nm  (Luxeon LHUV-0425-0600)":       (425,  13),
+    "455 nm  (Osram LD-CQ7P-1U3U)":         (455,  21),
+    "470 nm  (Osram LBCP7P-GYHY)":          (468,  16),
+    "505 nm  (Osram LVCK7P-JYKZ)":          (507,  33),
+    "528 nm  (Osram LTCP7P-KXKZ)":          (529,  36),
+    "567 nm  (Luxeon Rebel ES Lime)":        (567, 103),
+    "590 nm  (Osram LYCP7P-JRJT)":          (592,  17),
+    "617 nm  (Osram LACP7P-KPKR)":          (620,  18),
+    "625 nm  (Osram LRCP7P-JRJT)":          (630,  19),
+    "645 nm  (Osram LHCP7P-2T3T)":          (656,  23),
+    "660 nm  (Osram Hyper Red)":             (656,  17),
+    "690 nm  (Roithner SMB1N-690D)":         (687,  22),
+    "730 nm  (Osram Far Red)":               (728,  31),
+    "780 nm  (Roithner SMB1N-780-02)":       (772,  28),
+    "810 nm  (Roithner SMB1N-810D-02)":      (802,  27),
+    "850 nm  (Osram ILH-IW01-85SL)":        (858,  30),
+    "890 nm  (Roithner SMB1N-890DS)":        (880,  32),
+    "940 nm  (Osram ILH-IO01-94SL)":        (940,  38),
+    "980 nm  (Roithner SMB1N-980D)":         (949,  38),
+    "1050 nm (Roithner SMB1N-1050-02)":      (1050, 600),
+    "Custom (enter below)":                  (None, None),
+}
+
+
+def effective_epsilon(wl_eps, eps_values, led_center, led_fwhm):
+    """Flux-weighted effective absorption coefficient for a Gaussian LED spectrum."""
+    sigma = led_fwhm / (2 * np.sqrt(2 * np.log(2)))
+    S     = np.exp(-0.5 * ((wl_eps - led_center) / sigma) ** 2)
+    mask  = (wl_eps >= led_center - 4*led_fwhm) & (wl_eps <= led_center + 4*led_fwhm)
+    if mask.sum() < 2:
+        return float(eps_values[np.abs(wl_eps - led_center).argmin()])
+    from scipy.integrate import trapezoid
+    norm = trapezoid(S[mask], wl_eps[mask])
+    return float(trapezoid(S[mask] * eps_values[mask], wl_eps[mask]) / norm)
+
 def calculate_photon_flux(params):
     print_func = params['Print function']
     logger     = params['logger']
@@ -202,10 +249,8 @@ def report_cis_fraction(params):
     frac_A_pss     = c_A[-1] / c_total[-1] * 100
     frac_B_pss     = c_B[-1] / c_total[-1] * 100
 
-    print_func(f"Fraction {name_A} at t=0  : {frac_A_initial:.1f} %")
-    print_func(f"Fraction {name_B} at t=0  : {frac_B_initial:.1f} %")
-    print_func(f"Fraction {name_A} at PSS  : {frac_A_pss:.1f} %")
-    print_func(f"Fraction {name_B} at PSS  : {frac_B_pss:.1f} %")
+    print_func(f"Fraction {name_B} (cis) at t=0 : {frac_B_initial:.1f} %")
+    print_func(f"Fraction {name_B} (cis) at PSS : {frac_B_pss:.1f} %")
     logger.info(f"{name_A} fraction — t=0: {frac_A_initial:.2f} %, PSS: {frac_A_pss:.2f} %")
     logger.info(f"{name_B} fraction — t=0: {frac_B_initial:.2f} %, PSS: {frac_B_pss:.2f} %")
 
@@ -224,10 +269,18 @@ def ladanyi_fit(params):
     df_abs_coeff = params['Abs coeff df']
     names      = params['Names']
 
-    wl_idx = (df_abs_coeff.iloc[:, 0] - params['Irradiation wavelength']).abs().argmin()
-    # c_A = column 1, c_B = column 2 — always, no swap.
-    e_A = float(df_abs_coeff.iloc[wl_idx, 1])
-    e_B = float(df_abs_coeff.iloc[wl_idx, 2])
+    _wl_eps_arr = df_abs_coeff.iloc[:, 0].to_numpy(dtype=float)
+    _eps_A_arr  = df_abs_coeff.iloc[:, 1].to_numpy(dtype=float)
+    _eps_B_arr  = df_abs_coeff.iloc[:, 2].to_numpy(dtype=float)
+    _led_center = params['Irradiation wavelength']
+    _led_fwhm   = params.get('LED FWHM', 0.0)
+    if _led_fwhm > 0:
+        e_A = effective_epsilon(_wl_eps_arr, _eps_A_arr, _led_center, _led_fwhm)
+        e_B = effective_epsilon(_wl_eps_arr, _eps_B_arr, _led_center, _led_fwhm)
+    else:
+        wl_idx = np.abs(_wl_eps_arr - _led_center).argmin()
+        e_A    = float(_eps_A_arr[wl_idx])
+        e_B    = float(_eps_B_arr[wl_idx])
 
     c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
     c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
@@ -349,8 +402,17 @@ def ladanyi_fit(params):
 
 def run_analysis(params):
     setup_logger(params)
-    logger = params['logger']
+    logger     = params['logger']
+    print_func = params['Print function']
     logger.info('Starting Ladányi QY analysis')
+    _led_name   = params.get('LED name', 'Custom')
+    _led_center = params['Irradiation wavelength']
+    _led_fwhm   = params.get('LED FWHM', 0.0)
+    params['LED central wavelength'] = _led_center
+    params['LED FWHM'] = _led_fwhm
+    print_func(f'LED: {_led_name}')
+    print_func(f'     central WL = {_led_center:.0f} nm,  FWHM = {_led_fwhm:.0f} nm')
+    logger.info(f'LED: {_led_name}, central WL={_led_center:.0f} nm, FWHM={_led_fwhm:.0f} nm')
     logger.info(f"Irradiation: {params['Irradiation wavelength']} nm, "
                 f"channel: {params['Channel']}, voltage: {params['Voltage after ref']} V")
     logger.info(f"Concentration WL range: {params['Concentration WL min']}-{params['Concentration WL max']} nm")
@@ -407,10 +469,18 @@ def plotting_conc_and_fit(params, ax):
     t_min        = params['Plotting t_min']
     t_max        = params['Plotting t_max']
 
-    wl_idx = (df_abs_coeff.iloc[:, 0] - params['Irradiation wavelength']).abs().argmin()
-    # c_A = column 1, c_B = column 2 — always, no swap.
-    e_A = float(df_abs_coeff.iloc[wl_idx, 1])
-    e_B = float(df_abs_coeff.iloc[wl_idx, 2])
+    _wl_eps_arr = df_abs_coeff.iloc[:, 0].to_numpy(dtype=float)
+    _eps_A_arr  = df_abs_coeff.iloc[:, 1].to_numpy(dtype=float)
+    _eps_B_arr  = df_abs_coeff.iloc[:, 2].to_numpy(dtype=float)
+    _led_center = params['Irradiation wavelength']
+    _led_fwhm   = params.get('LED FWHM', 0.0)
+    if _led_fwhm > 0:
+        e_A = effective_epsilon(_wl_eps_arr, _eps_A_arr, _led_center, _led_fwhm)
+        e_B = effective_epsilon(_wl_eps_arr, _eps_B_arr, _led_center, _led_fwhm)
+    else:
+        wl_idx = np.abs(_wl_eps_arr - _led_center).argmin()
+        e_A    = float(_eps_A_arr[wl_idx])
+        e_B    = float(_eps_B_arr[wl_idx])
 
     c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
     c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
@@ -533,29 +603,55 @@ def run_gui():
     param_frame.grid(row=1, column=0, sticky="ew", pady=(0,8))
     param_frame.grid_columnconfigure(1, weight=1)
 
-    var_wl      = tk.StringVar(value='325')
-    var_wl_conc_min = tk.StringVar(value='330')
-    var_wl_conc_max = tk.StringVar(value='380')
-    var_voltage = tk.StringVar(value='7.465')
-    var_volume  = tk.StringVar(value='3')
-    var_conc    = tk.StringVar(value='40')
-    var_channel = tk.StringVar(value='low')
+    var_led_select   = tk.StringVar(value='Custom (enter below)')
+    var_led_center   = tk.StringVar(value='325')
+    var_led_fwhm     = tk.StringVar(value='0')
+    var_wl_conc_min  = tk.StringVar(value='330')
+    var_wl_conc_max  = tk.StringVar(value='380')
+    var_voltage      = tk.StringVar(value='7.465')
+    var_volume       = tk.StringVar(value='3')
+    var_conc         = tk.StringVar(value='40')
+    var_channel      = tk.StringVar(value='low')
+
+    # Row 0: LED dropdown
+    ttk.Label(param_frame, text="LED:").grid(row=0, column=0, sticky="w", pady=2, padx=(0,6))
+    led_combo = ttk.Combobox(param_frame, textvariable=var_led_select,
+                             values=list(LED_CATALOGUE.keys()),
+                             state="readonly", width=36)
+    led_combo.grid(row=0, column=1, sticky="w", padx=4)
+
+    def on_led_select(event=None):
+        name = var_led_select.get()
+        center, fwhm = LED_CATALOGUE.get(name, (None, None))
+        if center is not None:
+            var_led_center.set(str(center))
+            var_led_fwhm.set(str(fwhm))
+        state = 'normal' if center is None else 'disabled'
+        led_center_entry.config(state=state)
+        led_fwhm_entry.config(state=state)
+    led_combo.bind('<<ComboboxSelected>>', on_led_select)
 
     param_entries = [
-        ("Irradiation wavelength / nm",      var_wl),
-        ("Concentration WL min / nm",         var_wl_conc_min),
-        ("Concentration WL max / nm",         var_wl_conc_max),
-        ("Voltage after reference / V",       var_voltage),
-        ("Volume / mL",                       var_volume),
-        ("Concentration / µM",                var_conc),
+        ("LED central wavelength / nm",          var_led_center),
+        ("LED FWHM / nm  (0 = monochromatic)",  var_led_fwhm),
+        ("Concentration WL min / nm",            var_wl_conc_min),
+        ("Concentration WL max / nm",            var_wl_conc_max),
+        ("Voltage after reference / V",          var_voltage),
+        ("Volume / mL",                          var_volume),
+        ("Concentration / µM",                   var_conc),
     ]
+    entry_widgets = {}
     for i, (lbl, var) in enumerate(param_entries):
-        ttk.Label(param_frame, text=lbl + ":").grid(row=i, column=0, sticky="w", pady=2, padx=(0,6))
-        ttk.Entry(param_frame, textvariable=var, width=12).grid(row=i, column=1, sticky="w", padx=4)
+        ttk.Label(param_frame, text=lbl + ":").grid(row=i+1, column=0, sticky="w", pady=2, padx=(0,6))
+        e = ttk.Entry(param_frame, textvariable=var, width=12)
+        e.grid(row=i+1, column=1, sticky="w", padx=4)
+        entry_widgets[lbl] = e
+    led_center_entry = entry_widgets["LED central wavelength / nm"]
+    led_fwhm_entry   = entry_widgets["LED FWHM / nm  (0 = monochromatic)"]
 
-    ttk.Label(param_frame, text="Channel:").grid(row=6, column=0, sticky="w", pady=2, padx=(0,6))
+    ttk.Label(param_frame, text="Channel:").grid(row=9, column=0, sticky="w", pady=2, padx=(0,6))
     ttk.Combobox(param_frame, textvariable=var_channel, values=["low","high"],
-                 state="readonly", width=10).grid(row=6, column=1, sticky="w", padx=4)
+                 state="readonly", width=10).grid(row=9, column=1, sticky="w", padx=4)
 
     # Plotting parameters
     plot_frame = ttk.LabelFrame(left, text="Plot Parameters", padding=8)
@@ -646,7 +742,10 @@ def run_gui():
             'Abs coeff file':       coeff_file,
             'Results Folder':       results_dir,
             'Basename':             basename,
-            'Irradiation wavelength':  _float(var_wl.get()),
+            'Irradiation wavelength':  _float(var_led_center.get()),
+            'LED name':                var_led_select.get(),
+            'LED central wavelength':  _float(var_led_center.get()),
+            'LED FWHM':                _float(var_led_fwhm.get()),
             'Concentration WL min':      _float(var_wl_conc_min.get()),
             'Concentration WL max':      _float(var_wl_conc_max.get()),
             'Voltage after ref':    _float(var_voltage.get()),
