@@ -347,56 +347,68 @@ def ladanyi_fit(params):
     pd.DataFrame({'time / s': times, 'cA exp': c_A, 'cA fit': cA_fit}).to_csv(
         os.path.join(params['Results Folder'], f"{params['Basename']}_ladanyi_fit.csv"), index=False)
 
-    # ── Photons required to reach the PSS ─────────────────────────────────────
-    # Integrate the fitted ODE on a fine grid far beyond the measured window to
-    # find the asymptotic (PSS) composition, then determine the time at which the
-    # system first comes within PSS_TOL of that asymptote.
-    PSS_TOL = 0.01   # fraction of the total change remaining (1 %)
+    return params
 
-    # Integrate well past the last measured time to approximate the true PSS
-    t_long = np.linspace(times[0], times[-1] * 20, 20000)
-    sol_long = solve_ivp(dcA_dt, (t_long[0], t_long[-1]), y0=[cA0, cB0],
-                         t_eval=t_long, args=(phi_A_fit, phi_B_fit), method="LSODA")
-    cA_long = sol_long.y[0]
-    cB_long = sol_long.y[1]
-    cA_pss  = cA_long[-1]   # asymptotic c_A at PSS
 
-    # Time to reach PSS: first time |cA(t) - cA_pss| <= PSS_TOL * |cA_pss - cA0|
-    total_change = abs(cA_pss - cA0)
-    if total_change > 0:
-        within = np.abs(cA_long - cA_pss) <= PSS_TOL * total_change
-        idx_pss = np.argmax(within) if within.any() else len(t_long) - 1
-        t_pss   = t_long[idx_pss]
-    else:
-        t_pss = 0.0
+def fit_photoswitching_kinetics(params):
+    """Fit a mono-exponential buildup curve to extract k, t1/2 and p1/2 (Note 7).
 
-    # Incident photons up to t_pss
-    Q_incident = I0 * t_pss   # photons s^-1 * s = photons (since I0 = Abs photon flux in s^-1)
+    Model:  c_B(t) = c_B_PSS - (c_B_PSS - c_B0) * exp(-k * t)
+    t1/2  = ln(2) / k                       (isomerization half-time)
+    p1/2  = t1/2 * I(lambda)                (half-power, light-source independent)
+    I(lambda) is the total incident optical power at the irradiation wavelength,
+    obtained directly from the calibration (voltage * correction factor), in mW.
+    """
+    print_func = params['Print function']
+    logger     = params['logger']
+    df_conc    = params['Conc df']
+    names      = params['Names']
 
-    # Absorbed photons up to t_pss: integrate q_abs(t) = I0 * (1 - 10^-A_tot(t)) dt
-    mask_pss   = t_long <= t_pss
-    A_tot_long = cA_long * e_A + cB_long * e_B
-    q_abs_t    = I0 * (1 - 10.0**(-A_tot_long))
-    Q_absorbed = np.trapz(q_abs_t[mask_pss], t_long[mask_pss])
+    times = df_conc['time / s'].to_numpy()
+    c_B   = df_conc['c_B / uM'].to_numpy()
+    cB0   = c_B[0]
 
-    # Express also in mol of photons (einstein)
-    Q_incident_mol = Q_incident / constants.Avogadro
-    Q_absorbed_mol = Q_absorbed / constants.Avogadro
+    def model(t, k, cB_pss):
+        return cB_pss - (cB_pss - cB0) * np.exp(-k * t)
 
-    x_A_pss = cA_pss / (cA_pss + (cA0 + cB0 - cA_pss))  # = cA_pss / (cA0+cB0)
+    k_guess  = 1.0 / times[-1] if times[-1] > 0 else 1.0
+    p0       = [k_guess, c_B[-1]]
+    popt, _  = curve_fit(model, times, c_B, p0=p0, maxfev=10000)
+    k_fit, cB_pss_fit = popt
+    t_half   = np.log(2) / k_fit
 
-    print_func(f"\nPSS reached at t = {t_pss:.1f} s  (within {PSS_TOL*100:.0f} % of asymptote)")
-    print_func(f"  Incident photons to PSS: {Q_incident:.3e}  ({Q_incident_mol:.3e} mol)")
-    print_func(f"  Absorbed photons to PSS: {Q_absorbed:.3e}  ({Q_absorbed_mol:.3e} mol)")
-    logger.info(f"PSS at t={t_pss:.2f} s; Q_incident={Q_incident:.4e} ({Q_incident_mol:.4e} mol), "
-                f"Q_absorbed={Q_absorbed:.4e} ({Q_absorbed_mol:.4e} mol)")
+    # I(lambda): total incident optical power, independent of volume/Avogadro
+    # normalisation — directly from the calibration (voltage * correction factor).
+    wl         = params['Irradiation wavelength']
+    cf         = get_correction_factor(wl, params['Channel'])
+    I_power_mW = params['Voltage after ref'] * cf
+    p_half_mJ  = t_half * I_power_mW   # s * mW = mJ
 
-    params['t_PSS / s']           = t_pss
-    params['Q_incident_to_PSS']   = Q_incident
-    params['Q_absorbed_to_PSS']   = Q_absorbed
-    params['Q_incident_mol']      = Q_incident_mol
-    params['Q_absorbed_mol']      = Q_absorbed_mol
+    print_func(f"\nPhotoswitching kinetics ({names[1]} buildup, mono-exponential fit):")
+    print_func(f"  k     = {k_fit:.4e} s\u207b\u00b9")
+    print_func(f"  t1/2  = {t_half:.2f} s")
+    print_func(f"  I(\u03bb)  = {I_power_mW:.2f} mW")
+    print_func(f"  p1/2  = {p_half_mJ:.2f} mJ")
+    logger.info(f"Kinetics fit: k={k_fit:.4e} s-1, t1/2={t_half:.3f} s, "
+                f"I(lambda)={I_power_mW:.3f} mW, p1/2={p_half_mJ:.3f} mJ")
 
+    cB_fit_curve = model(times, k_fit, cB_pss_fit)
+    pd.DataFrame({'time / s': times, 'cB exp / uM': c_B, 'cB fit / uM': cB_fit_curve}).to_csv(
+        os.path.join(params['Results Folder'], f"{params['Basename']}_kinetics_fit.csv"), index=False)
+
+    # Smooth curve for plotting
+    t_smooth  = np.linspace(times[0], times[-1], 400)
+    cB_smooth = model(t_smooth, k_fit, cB_pss_fit)
+
+    params['k']             = k_fit
+    params['t_half / s']    = t_half
+    params['I_lambda / mW'] = I_power_mW
+    params['p_half / mJ']   = p_half_mJ
+    params['Kinetics times']     = times
+    params['Kinetics cB']        = c_B
+    params['Kinetics t_smooth']  = t_smooth
+    params['Kinetics cB_smooth'] = cB_smooth
+    params['Kinetics cB_pss']    = cB_pss_fit
     return params
 
 
@@ -425,6 +437,7 @@ def run_analysis(params):
 
     calculate_concentration_profile(params)
     report_cis_fraction(params)
+    fit_photoswitching_kinetics(params)
     ladanyi_fit(params)
     return params
 
@@ -516,6 +529,44 @@ def plotting_conc_and_fit(params, ax):
     ax.legend()
 
 
+def plotting_kinetics_fit(params, ax):
+    """Plot the photoswitching kinetics: c_B(t) data with mono-exponential fit,
+    annotated with k, t1/2 and p1/2."""
+    times     = params['Kinetics times']
+    c_B       = params['Kinetics cB']
+    t_smooth  = params['Kinetics t_smooth']
+    cB_smooth = params['Kinetics cB_smooth']
+    cB_pss    = params['Kinetics cB_pss']
+    t_half    = params['t_half / s']
+    names     = params['Names']
+    t_min     = params['Plotting t_min']
+    t_max     = params['Plotting t_max']
+
+    ax.scatter(times, c_B, color='C1', s=14, zorder=3, label=f'{names[1]} (data)')
+    ax.plot(t_smooth, cB_smooth, color='black', lw=1.5, zorder=2, label='mono-exp. fit')
+
+    # PSS asymptote and t1/2 markers
+    ax.axhline(cB_pss, color='gray', ls=':', lw=1, zorder=1)
+    if t_half <= times[-1]:
+        cB_half = cB_pss - (cB_pss - c_B[0]) * 0.5
+        ax.axvline(t_half, color='tomato', ls='--', lw=1, zorder=1)
+        ax.scatter([t_half], [cB_half], color='tomato', s=30, zorder=4)
+
+    txt = (f"k = {params['k']:.2e} s$^{{-1}}$\n"
+           f"$t_{{1/2}}$ = {t_half:.1f} s\n"
+           f"I($\\lambda$) = {params['I_lambda / mW']:.1f} mW\n"
+           f"$p_{{1/2}}$ = {params['p_half / mJ']:.1f} mJ")
+    ax.text(0.97, 0.05, txt, transform=ax.transAxes, ha='right', va='bottom',
+            fontsize=9, bbox=dict(boxstyle='round', fc='white', ec='gray', alpha=0.85))
+
+    ax.set_xlabel('irradiation time / s')
+    ax.set_ylabel('concentration / µM')
+    ax.set_title('Photoswitching kinetics')
+    if t_min != 0: ax.set_xlim(left=t_min)
+    if t_max != 0: ax.set_xlim(right=t_max)
+    ax.legend(loc='center right')
+
+
 def save_individual_plot(plot_func, params, suffix):
     fig, ax = plt.subplots(figsize=(8, 6))
     plot_func(params, ax)
@@ -528,20 +579,36 @@ def save_individual_plot(plot_func, params, suffix):
 def plot_results(params, figure):
     figure.clf()
     has_spectra = params['Has spectra']
-    n_plots = 2 if has_spectra else 1
+    n_plots = 3 if has_spectra else 2
+    figure.set_size_inches(8 * n_plots, 6)   # each panel ~8x6 in the saved SVG
+    try:
+        figure.set_constrained_layout(True)
+    except Exception:
+        pass
     axs = figure.subplots(1, n_plots)
 
     if has_spectra:
         plotting_spectra(params, axs[0])
         plotting_conc_and_fit(params, axs[1])
+        plotting_kinetics_fit(params, axs[2])
         save_individual_plot(plotting_spectra,      params, '_spectra')
         save_individual_plot(plotting_conc_and_fit, params, '_conc_fit')
+        save_individual_plot(plotting_kinetics_fit, params, '_kinetics_fit')
     else:
         plotting_conc_and_fit(params, axs[0])
+        plotting_kinetics_fit(params, axs[1])
         save_individual_plot(plotting_conc_and_fit, params, '_conc_fit')
+        save_individual_plot(plotting_kinetics_fit, params, '_kinetics_fit')
 
     figure.savefig(os.path.join(params['Results Folder'], params['Basename'] + '_results.svg'),
                    bbox_inches='tight')
+
+
+def get_plot_functions(params):
+    """Return the plotting functions to display, in order, for the current run."""
+    if params['Has spectra']:
+        return [plotting_spectra, plotting_conc_and_fit, plotting_kinetics_fit]
+    return [plotting_conc_and_fit, plotting_kinetics_fit]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -552,6 +619,9 @@ def run_gui():
     root = tk.Tk()
     root.title("QY Calculation")
     root.resizable(True, True)
+    root.geometry("1750x880")     # wide enough for all three plots side by side
+    root.minsize(1100, 650)
+    root.maxsize(3200, 1800)      # generous cap for 4K
 
     root.grid_columnconfigure(0, weight=0, minsize=320)
     root.grid_columnconfigure(1, weight=1)
@@ -686,18 +756,64 @@ def run_gui():
     # ── Right panel ──────────────────────────────────────────────────────────
     right = ttk.Frame(root, padding=10)
     right.grid(row=0, column=1, sticky="nsew")
-    right.grid_rowconfigure(1, weight=1)
-    right.grid_rowconfigure(3, weight=3)
+    right.grid_rowconfigure(1, weight=0)   # output box: fixed height
+    right.grid_rowconfigure(3, weight=1)   # plots area: takes the rest
     right.grid_columnconfigure(0, weight=1)
 
     ttk.Label(right, text="Output", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w")
-    output_box = tk.Text(right, height=8, wrap="word", font=("TkFixedFont", 9))
-    output_box.grid(row=1, column=0, sticky="nsew", pady=(4,10))
+    out_frame = ttk.Frame(right)
+    out_frame.grid(row=1, column=0, sticky="nsew", pady=(4,10))
+    out_frame.grid_rowconfigure(0, weight=1)
+    out_frame.grid_columnconfigure(0, weight=1)
+    output_box = tk.Text(out_frame, height=22, wrap="word", font=("TkFixedFont", 9))
+    output_box.grid(row=0, column=0, sticky="nsew")
+    out_scroll = ttk.Scrollbar(out_frame, orient="vertical", command=output_box.yview)
+    out_scroll.grid(row=0, column=1, sticky="ns")
+    output_box.config(yscrollcommand=out_scroll.set)
 
     ttk.Label(right, text="Plots", font=("TkDefaultFont", 10, "bold")).grid(row=2, column=0, sticky="w")
-    fig = plt.Figure(figsize=(14, 5), dpi=100)
-    canvas = FigureCanvasTkAgg(fig, master=right)
-    canvas.get_tk_widget().grid(row=3, column=0, sticky="nsew", pady=(4,0))
+
+    # Scrollable container: the three plots sit side by side in one row, each its
+    # own fixed-size figure. Fixed figure size = no stretching/squishing on resize.
+    # A horizontal scrollbar appears as a fallback if the window is too narrow.
+    plots_outer = ttk.Frame(right)
+    plots_outer.grid(row=3, column=0, sticky="nsew", pady=(4,0))
+    plots_outer.grid_rowconfigure(0, weight=1)
+    plots_outer.grid_columnconfigure(0, weight=1)
+
+    plots_canvas = tk.Canvas(plots_outer, highlightthickness=0)
+    plots_canvas.grid(row=0, column=0, sticky="nsew")
+    plots_hscroll = ttk.Scrollbar(plots_outer, orient="horizontal", command=plots_canvas.xview)
+    plots_hscroll.grid(row=1, column=0, sticky="ew")
+    plots_canvas.configure(xscrollcommand=plots_hscroll.set)
+
+    plots_inner = ttk.Frame(plots_canvas)
+    plots_window = plots_canvas.create_window((0, 0), window=plots_inner, anchor="nw")
+
+    def _on_inner_config(event):
+        plots_canvas.configure(scrollregion=plots_canvas.bbox("all"))
+    plots_inner.bind("<Configure>", _on_inner_config)
+
+    def _on_canvas_config(event):
+        # keep inner frame at least as tall as the canvas
+        plots_canvas.itemconfigure(plots_window, height=max(event.height, 1))
+    plots_canvas.bind("<Configure>", _on_canvas_config)
+
+    # Mouse-wheel scrolls horizontally over the plots area
+    def _on_mousewheel(event):
+        delta = -1 * (event.delta // 120) if event.delta else (1 if event.num == 5 else -1)
+        plots_canvas.xview_scroll(delta, "units")
+    plots_canvas.bind("<Enter>", lambda e: (
+        plots_canvas.bind_all("<MouseWheel>", _on_mousewheel),
+        plots_canvas.bind_all("<Button-4>", _on_mousewheel),
+        plots_canvas.bind_all("<Button-5>", _on_mousewheel)))
+    plots_canvas.bind("<Leave>", lambda e: (
+        plots_canvas.unbind_all("<MouseWheel>"),
+        plots_canvas.unbind_all("<Button-4>"),
+        plots_canvas.unbind_all("<Button-5>")))
+
+    # Holds the live FigureCanvasTkAgg widgets so we can clear them between runs
+    plot_canvases = []
 
     def _float(s):
         """Parse float accepting both '.' and ',' as decimal separator."""
@@ -706,8 +822,10 @@ def run_gui():
     # ── Run callback ─────────────────────────────────────────────────────────
     def run():
         output_box.delete("1.0", tk.END)
-        fig.clear()
-        canvas.draw()
+        # Clear any previously drawn plots
+        for c in plot_canvases:
+            c.get_tk_widget().destroy()
+        plot_canvases.clear()
 
         def printer(msg):
             output_box.insert(tk.END, msg + "\n")
@@ -766,8 +884,31 @@ def run_gui():
 
         try:
             run_analysis(params)
-            plot_results(params, fig)
-            canvas.draw()
+            # Save the combined SVG + individual SVGs to disk (unchanged)
+            save_fig = plt.Figure()
+            plot_results(params, save_fig)
+            plt.close(save_fig)
+
+            # Render each plot in its own fixed-size figure, side by side.
+            # Spectra gets a bit more width; the two kinetics plots a bit less.
+            plot_funcs = get_plot_functions(params)
+            for i, plot_func in enumerate(plot_funcs):
+                if plot_func is plotting_spectra:
+                    figsize = (6.0, 3.75)   # wider
+                else:
+                    figsize = (4.5, 3.75)   # narrower
+                f  = plt.Figure(figsize=figsize, dpi=100)
+                ax = f.add_subplot(111)
+                plot_func(params, ax)
+                f.tight_layout()
+                holder = ttk.Frame(plots_inner)
+                holder.grid(row=0, column=i, sticky="n", padx=(0, 12))
+                fc = FigureCanvasTkAgg(f, master=holder)
+                fc.draw()
+                fc.get_tk_widget().pack()
+                plot_canvases.append(fc)
+
+            plots_canvas.xview_moveto(0.0)
             printer("\nDone. Results saved to results folder.")
         except Exception as e:
             messagebox.showerror("Error", str(e))
