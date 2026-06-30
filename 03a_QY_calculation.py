@@ -619,9 +619,9 @@ def run_gui():
     root = tk.Tk()
     root.title("QY Calculation")
     root.resizable(True, True)
-    root.geometry("1750x880")     # wide enough for all three plots side by side
-    root.minsize(1100, 650)
-    root.maxsize(3200, 1800)      # generous cap for 4K
+    root.geometry("1850x950")     # fits the 2x2 layout with equal-width plots
+    root.minsize(1100, 700)
+    root.maxsize(3200, 2000)      # generous cap for 4K
 
     root.grid_columnconfigure(0, weight=0, minsize=320)
     root.grid_columnconfigure(1, weight=1)
@@ -754,66 +754,61 @@ def run_gui():
     run_btn.grid(row=3, column=0, sticky="ew", pady=(4,0), ipady=4)
 
     # ── Right panel ──────────────────────────────────────────────────────────
+    # Layout (2 columns):
+    #   [ Output text     ] [ top-right plot  (spectra) ]
+    #   [ bottom-left plot ] [ bottom-right plot         ]
     right = ttk.Frame(root, padding=10)
     right.grid(row=0, column=1, sticky="nsew")
-    right.grid_rowconfigure(1, weight=0)   # output box: fixed height
-    right.grid_rowconfigure(3, weight=1)   # plots area: takes the rest
-    right.grid_columnconfigure(0, weight=1)
+    right.grid_columnconfigure(0, weight=1, minsize=660)
+    right.grid_columnconfigure(1, weight=1, minsize=660)
+    right.grid_rowconfigure(1, weight=0)   # top row (output + first plot): natural height
+    right.grid_rowconfigure(3, weight=0)   # bottom row (two plots): natural height
+    right.grid_rowconfigure(4, weight=1)   # spacer absorbs any extra vertical space
 
     ttk.Label(right, text="Output", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w")
+    ttk.Label(right, text="Plots",  font=("TkDefaultFont", 10, "bold")).grid(row=0, column=1, sticky="w")
+
     out_frame = ttk.Frame(right)
-    out_frame.grid(row=1, column=0, sticky="nsew", pady=(4,10))
+    out_frame.grid(row=1, column=0, sticky="new", padx=(0,10), pady=(4,10))
     out_frame.grid_rowconfigure(0, weight=1)
     out_frame.grid_columnconfigure(0, weight=1)
-    output_box = tk.Text(out_frame, height=22, wrap="word", font=("TkFixedFont", 9))
+    output_box = tk.Text(out_frame, height=27, wrap="word", font=("TkFixedFont", 9))
     output_box.grid(row=0, column=0, sticky="nsew")
     out_scroll = ttk.Scrollbar(out_frame, orient="vertical", command=output_box.yview)
     out_scroll.grid(row=0, column=1, sticky="ns")
     output_box.config(yscrollcommand=out_scroll.set)
 
-    ttk.Label(right, text="Plots", font=("TkDefaultFont", 10, "bold")).grid(row=2, column=0, sticky="w")
+    # Fixed slots for the plots. Plots are assigned in order:
+    #   plot 0 -> top-right (next to output), plot 1 -> bottom-left, plot 2 -> bottom-right
+    slot_topright = ttk.Frame(right)
+    slot_topright.grid(row=1, column=1, sticky="n", pady=(4,10))
+    slot_botleft  = ttk.Frame(right)
+    slot_botleft.grid(row=3, column=0, sticky="n", padx=(0,10))
+    slot_botright = ttk.Frame(right)
+    slot_botright.grid(row=3, column=1, sticky="n")
+    plot_slots = [slot_topright, slot_botleft, slot_botright]
 
-    # Scrollable container: the three plots sit side by side in one row, each its
-    # own fixed-size figure. Fixed figure size = no stretching/squishing on resize.
-    # A horizontal scrollbar appears as a fallback if the window is too narrow.
-    plots_outer = ttk.Frame(right)
-    plots_outer.grid(row=3, column=0, sticky="nsew", pady=(4,0))
-    plots_outer.grid_rowconfigure(0, weight=1)
-    plots_outer.grid_columnconfigure(0, weight=1)
-
-    plots_canvas = tk.Canvas(plots_outer, highlightthickness=0)
-    plots_canvas.grid(row=0, column=0, sticky="nsew")
-    plots_hscroll = ttk.Scrollbar(plots_outer, orient="horizontal", command=plots_canvas.xview)
-    plots_hscroll.grid(row=1, column=0, sticky="ew")
-    plots_canvas.configure(xscrollcommand=plots_hscroll.set)
-
-    plots_inner = ttk.Frame(plots_canvas)
-    plots_window = plots_canvas.create_window((0, 0), window=plots_inner, anchor="nw")
-
-    def _on_inner_config(event):
-        plots_canvas.configure(scrollregion=plots_canvas.bbox("all"))
-    plots_inner.bind("<Configure>", _on_inner_config)
-
-    def _on_canvas_config(event):
-        # keep inner frame at least as tall as the canvas
-        plots_canvas.itemconfigure(plots_window, height=max(event.height, 1))
-    plots_canvas.bind("<Configure>", _on_canvas_config)
-
-    # Mouse-wheel scrolls horizontally over the plots area
-    def _on_mousewheel(event):
-        delta = -1 * (event.delta // 120) if event.delta else (1 if event.num == 5 else -1)
-        plots_canvas.xview_scroll(delta, "units")
-    plots_canvas.bind("<Enter>", lambda e: (
-        plots_canvas.bind_all("<MouseWheel>", _on_mousewheel),
-        plots_canvas.bind_all("<Button-4>", _on_mousewheel),
-        plots_canvas.bind_all("<Button-5>", _on_mousewheel)))
-    plots_canvas.bind("<Leave>", lambda e: (
-        plots_canvas.unbind_all("<MouseWheel>"),
-        plots_canvas.unbind_all("<Button-4>"),
-        plots_canvas.unbind_all("<Button-5>")))
+    # All plots share the same box size so the columns line up.
+    PLOT_FIGSIZE = (6.5, 4.1)   # inches; dpi=100 -> 650 x 410 px
 
     # Holds the live FigureCanvasTkAgg widgets so we can clear them between runs
     plot_canvases = []
+
+    def _draw_placeholder(slot):
+        """Blank white box that reserves the plot's space before the first run,
+        so the output box doesn't resize when plots appear."""
+        f = plt.Figure(figsize=PLOT_FIGSIZE, dpi=100)
+        f.patch.set_facecolor('white')
+        ax = f.add_subplot(111)
+        ax.axis('off')
+        fc = FigureCanvasTkAgg(f, master=slot)
+        fc.draw()
+        fc.get_tk_widget().pack()
+        return fc
+
+    # Reserve plot space immediately on launch
+    for _slot in plot_slots:
+        plot_canvases.append(_draw_placeholder(_slot))
 
     def _float(s):
         """Parse float accepting both '.' and ',' as decimal separator."""
@@ -889,26 +884,20 @@ def run_gui():
             plot_results(params, save_fig)
             plt.close(save_fig)
 
-            # Render each plot in its own fixed-size figure, side by side.
-            # Spectra gets a bit more width; the two kinetics plots a bit less.
+            # Render each plot into its fixed slot:
+            #   plot 0 (spectra) -> top-right, next to the output
+            #   plots 1,2 -> bottom row
             plot_funcs = get_plot_functions(params)
             for i, plot_func in enumerate(plot_funcs):
-                if plot_func is plotting_spectra:
-                    figsize = (6.0, 3.75)   # wider
-                else:
-                    figsize = (4.5, 3.75)   # narrower
-                f  = plt.Figure(figsize=figsize, dpi=100)
+                f  = plt.Figure(figsize=PLOT_FIGSIZE, dpi=100)
                 ax = f.add_subplot(111)
                 plot_func(params, ax)
                 f.tight_layout()
-                holder = ttk.Frame(plots_inner)
-                holder.grid(row=0, column=i, sticky="n", padx=(0, 12))
-                fc = FigureCanvasTkAgg(f, master=holder)
+                slot = plot_slots[i]
+                fc = FigureCanvasTkAgg(f, master=slot)
                 fc.draw()
                 fc.get_tk_widget().pack()
                 plot_canvases.append(fc)
-
-            plots_canvas.xview_moveto(0.0)
             printer("\nDone. Results saved to results folder.")
         except Exception as e:
             messagebox.showerror("Error", str(e))
