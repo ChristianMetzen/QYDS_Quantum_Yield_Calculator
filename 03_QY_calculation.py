@@ -287,6 +287,24 @@ def ladanyi_fit(params):
     times = df_conc['time / s'].to_numpy()
     cA0, cB0 = c_A[0], c_B[0]
 
+    # ── Fit direction ─────────────────────────────────────────────────────────
+    # 'both'         : fit forward (educt->product) and backward (product->educt)
+    # 'forward_only' : only the forward reaction occurs (no back-isomerisation at
+    #                  this wavelength, e.g. 645 nm). The reverse QY is fixed to 0.
+    #
+    # Which species is the "product" is determined purely from the data: the
+    # product is whichever species' concentration increases under irradiation.
+    # This is species-agnostic (works beyond azobenzenes).
+    fit_direction = params.get('Fit direction', 'both')
+    product_is_B  = (c_B[-1] - c_B[0]) >= (c_A[-1] - c_A[0])   # B builds up?
+    forward_only  = (fit_direction == 'forward_only')
+
+    # Names for the forward / reverse reactions (forward = educt -> product)
+    if product_is_B:
+        fwd_label, rev_label = f"{names[0]}\u2192{names[1]}", f"{names[1]}\u2192{names[0]}"
+    else:
+        fwd_label, rev_label = f"{names[1]}\u2192{names[0]}", f"{names[0]}\u2192{names[1]}"
+
     # Linear least-squares pre-estimate for initial guess.
     # Derived directly from the ODE so the units match exactly:
     #   dcA/dt = P * (phi_B*cB*eB - phi_A*cA*eA),
@@ -314,9 +332,11 @@ def ladanyi_fit(params):
     # Clip the pre-estimate to physically plausible quantum yields [0, 1]
     phi_A_guess = float(np.clip(Phi_est[0], 0.0, 1.0))
     phi_B_guess = float(np.clip(Phi_est[1], 0.0, 1.0))
-    initial_guess = [phi_A_guess, phi_B_guess]
     print_func(f"Pre-estimate: \u03a6({names[0]}\u2192{names[1]})\u2248{phi_A_guess:.3f}, "
                f"\u03a6({names[1]}\u2192{names[0]})\u2248{phi_B_guess:.3f}")
+    if forward_only:
+        print_func(f"Fit direction: forward only \u2014 fixing reverse QY \u03a6({rev_label}) = 0")
+        logger.info(f"Fit direction: forward only; reverse QY ({rev_label}) fixed to 0")
 
     def dcA_dt(t, y, phi_A, phi_B):
         cA, cB = y
@@ -327,13 +347,34 @@ def ladanyi_fit(params):
         dcA = prefactor * (1 - 10**(-A_tot)) / A_tot * (phi_B * cB * e_B - phi_A * cA * e_A)
         return [dcA, -dcA]
 
-    def model(times, phi_A, phi_B):
-        sol = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
-                        t_eval=times, args=(phi_A, phi_B), method="LSODA")
-        return sol.y[0]
-
-    popt, _ = curve_fit(model, times, c_A, p0=initial_guess)
-    phi_A_fit, phi_B_fit = popt
+    if not forward_only:
+        # Fit both quantum yields.
+        def model(times, phi_A, phi_B):
+            sol = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
+                            t_eval=times, args=(phi_A, phi_B), method="LSODA")
+            return sol.y[0]
+        popt, _ = curve_fit(model, times, c_A, p0=[phi_A_guess, phi_B_guess])
+        phi_A_fit, phi_B_fit = popt
+    else:
+        # Forward only: the reverse (product -> educt) QY is fixed to 0.
+        # 'product' is the species that builds up; in the A/B ODE the reverse
+        # term carries the QY of whichever species is the product:
+        #   product = B -> reverse QY is phi_B  -> fix phi_B = 0, fit phi_A
+        #   product = A -> reverse QY is phi_A  -> fix phi_A = 0, fit phi_B
+        if product_is_B:
+            def model(times, phi_fwd):
+                sol = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
+                                t_eval=times, args=(phi_fwd, 0.0), method="LSODA")
+                return sol.y[0]
+            popt, _ = curve_fit(model, times, c_A, p0=[phi_A_guess])
+            phi_A_fit, phi_B_fit = float(popt[0]), 0.0
+        else:
+            def model(times, phi_fwd):
+                sol = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
+                                t_eval=times, args=(0.0, phi_fwd), method="LSODA")
+                return sol.y[0]
+            popt, _ = curve_fit(model, times, c_A, p0=[phi_B_guess])
+            phi_A_fit, phi_B_fit = 0.0, float(popt[0])
 
     print_func(f"\u03a6({names[0]}\u2192{names[1]}) = {phi_A_fit:.4e}  ({phi_A_fit*100:.2f} %)")
     print_func(f"\u03a6({names[1]}\u2192{names[0]}) = {phi_B_fit:.4e}  ({phi_B_fit*100:.2f} %)")
@@ -343,7 +384,7 @@ def ladanyi_fit(params):
     params['Ladanyi QY A->B'] = phi_A_fit
     params['Ladanyi QY B->A'] = phi_B_fit
 
-    cA_fit = model(times, phi_A_fit, phi_B_fit)
+    cA_fit = model(times, popt[0]) if forward_only else model(times, phi_A_fit, phi_B_fit)
     pd.DataFrame({'time / s': times, 'cA exp': c_A, 'cA fit': cA_fit}).to_csv(
         os.path.join(params['Results Folder'], f"{params['Basename']}_ladanyi_fit.csv"), index=False)
 
@@ -429,6 +470,7 @@ def run_analysis(params):
                 f"channel: {params['Channel']}, voltage: {params['Voltage after ref']} V")
     logger.info(f"Concentration WL range: {params['Concentration WL min']}-{params['Concentration WL max']} nm")
     logger.info(f"Volume: {params['Volume']} mL, concentration: {params['Concentration']*1e6:.1f} µM")
+    logger.info(f"Fit direction: {params.get('Fit direction', 'both')}")
 
     calculate_photon_flux(params)
 
@@ -682,6 +724,7 @@ def run_gui():
     var_volume       = tk.StringVar(value='3')
     var_conc         = tk.StringVar(value='40')
     var_channel      = tk.StringVar(value='low')
+    var_fit_dir      = tk.StringVar(value='forward + backward')
 
     # Row 0: LED dropdown
     ttk.Label(param_frame, text="LED:").grid(row=0, column=0, sticky="w", pady=2, padx=(0,6))
@@ -722,6 +765,11 @@ def run_gui():
     ttk.Label(param_frame, text="Channel:").grid(row=9, column=0, sticky="w", pady=2, padx=(0,6))
     ttk.Combobox(param_frame, textvariable=var_channel, values=["low","high"],
                  state="readonly", width=10).grid(row=9, column=1, sticky="w", padx=4)
+
+    ttk.Label(param_frame, text="Fit direction:").grid(row=10, column=0, sticky="w", pady=2, padx=(0,6))
+    ttk.Combobox(param_frame, textvariable=var_fit_dir,
+                 values=["forward + backward", "forward only"],
+                 state="readonly", width=18).grid(row=10, column=1, sticky="w", padx=4)
 
     # Plotting parameters
     plot_frame = ttk.LabelFrame(left, text="Plot Parameters", padding=8)
@@ -865,6 +913,8 @@ def run_gui():
             'Volume':               _float(var_volume.get()),
             'Concentration':        _float(var_conc.get()) * 1e-6,
             'Channel':              var_channel.get(),
+            'Fit direction':        ('forward_only' if var_fit_dir.get() == 'forward only'
+                                     else 'both'),
             'Color palette':        var_palette.get(),
             'Plotting A_min':       _float(var_A_min.get()),
             'Plotting A_max':       _float(var_A_max.get()),
