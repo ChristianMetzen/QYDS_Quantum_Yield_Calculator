@@ -1,35 +1,40 @@
-These scripts allow the calculation of photoswitching quantum yields of reversible photoreaction, like azobenzenes or DAEs. 
+These scripts calculate photoswitching quantum yields of reversible photoreactions (azobenzenes, DAEs, ...) following Ladányi et al., Photochem. Photobiol. Sci., 2017, 16, 1757.
 
-In the current state, the thermal relaxation is not considered, which is valid for azobenzenes and DAEs.
+Thermal relaxation can optionally be included in the QY fit (see step 4).
 
-If you want to measure the photon flux via actiometry with the "00_Ferrioxalate_Actinometry.ipynb" notebook, but the calculated photon fluxes from the solar cell were in good agreement with the measured ones, so this is not necessary.
+All scripts read the UV-Vis .csv files both raw and after the csv changer.
 
-The scripts use the .dat file from the QYDS and the .csv from the UV Vis as they are. Previous modifications might lead to errors. 
+## 0. Preparation
 
-For modification of the UV Vis file, use the "00_UVVis_csv_changer.py"
-  Here, you can load a csv and select a first and last column that should be in the final file. Currently, removal of singular columns is not possible with this script. It also removes the metadata block in the csv. 
-  Currently, this script runs on the old read-in function for csv files, so bigger measurements could take some time to load
+"00_UVVis_csv_changer.py": load a UV-Vis csv, tick the spectra you want to remove and save. The metadata block is removed.
 
-You can plot you inital spectra using the "00_plot_initial_spectra.ipynb" notebook, and also select a wavelength at which the kinetcs are plotted. 
+"00_get_absorption_coeffs_of_pure_components.py": absorption coefficients of the pure components from two spectra with known composition (e.g. thermal equilibrium and a PSS) and the total concentration. The composition can be determined via NMR or HPLC with DAD. If thermal relaxation is fast, measure the composition and the spectrum at the same time.
+  The 1st column of the output is component A, the 2nd column component B. This order defines A and B in the QY script.
 
-For calculation of the quantum yield, the absorption coefficients of the pure components must be determined. This can be done with the "01_get_absorption_coeffs_of_pure_components.py" script.
-  To use this, you need two spectra with known composition and the total concentration. For this, the spectrum of the thermal equilibrium and some PSS is recommended. 
-  The composition can be determined via NMR or HPLC with a DAD. If the thermal relaxation is negligible, no corrections are needed here.
+## 1. Photon flux
 
-Before the calculation of the qunatum yield, the measured data must be converted to the needed structure using the "02_kinetics_preparation.py" script.
-  This works for the following 3 types of measurements:
-    1. Multiple individual spectra are recorded.
-      1a. The cuvette is transferred from the QYDS to the UV Vis at certain irradiation times. In this case the QYDS .dat file must be used to get the irradiation times. Here it is important the the entries in the .dat file match the number of spectra.
-        Set the Measurement type to "Multiple spectra" and the Manual / Auto parameter to "manual". Load the UV-Vis file and the QYDS file. For this, the irradiation wavelength is not important.
-      1b. The spectra were measured directly in the QYDS under continuous irradiation. (Note, that the time point of the whole spectra will be set to the start of the measurement. A delay between the wavelengths is not considered here). 
-        Set the Measurement type to "Multiple spectra" and the Manual / Auto parameter to "auto". Load the UV-Vis file and set the irradiation time at the start and the time-step between the measurements. For this, the irradiation wavelength is not important.
-    2. A kinetic measurement directly in the QYDS under continuous irradiation. Note, that the observation wavelength must be the irradiation wavelength, for the qunatum yield calculation to work. Also an initial spectrum must be measured to correct the absorbance.
-      Set the Measurement type to "Kinetics". Load the UV-Vis files (Kinetics file and Initial UV-Vis spectrum). Enter the irradiation/observation wavelength. 
-  Select the output folder and the file name and press "Build & Save Kinetics DataFrame".
+"01a_Ferrioxalate_Actinometry.ipynb"
+  Part 1: photon flux from the photodiode (voltage after reference cuvette, wavelength, channel).
+  Part 2: required irradiation time for ferrioxalate actinometry.
+  Part 3: photon flux from the ferrioxalate measurement (compared with Part 1).
+  The photon flux in mol s-1 is the input for the QY script.
 
-  To calculate the quantum yields, use the "03_QY_calculation.py" script.
-    Load the Kinetics dataframe form the step before, the absorption coefficient and select a results folder.
-    Enter the irradiation wavelength, the voltage after reference cuvette, the volume, the concentration and the channel. From this, the photon flux is automatically calculated.
-    Press "Run Analysis" and adjusted the plotting parameters as needed.
-    
-  
+## 2. Kinetics dataframe
+
+"02a_kinetics_preparation.py" converts the measured data to the needed structure. UV-Vis files can be used raw or after the csv changer.
+  1. Multiple spectra: the first spectrum is taken before irradiation, then one spectrum after every irradiation step.
+      Measurement type "Multiple Spectra". Load the UV-Vis file, set the irradiation time of the first spectrum (normally 0) and the step. Times are 0, step, 2*step, ...
+  2. Kinetic trace directly in the QYDS under continuous irradiation. An initial spectrum is needed to correct the absorbance offset.
+      Measurement type "Kinetics". Load the kinetics file and the initial spectrum, enter the observation wavelength.
+  Select the output folder and file name and press "Build & Save Kinetics DataFrame".
+
+## 3./4. Quantum yields
+
+"03_QY_calculation.py"
+  Load the kinetics dataframe, the absorption coefficients and select a results folder.
+  Enter the LED (or central wavelength and FWHM), the photon flux in mol s-1 and the irradiated volume.
+  Concentrations: for spectra series they are obtained by a two-component least-squares fit in the "Concentration WL" range, so no total concentration is needed. The entered concentration is only used for single-wavelength kinetics.
+  Photoreaction: "forward + backward" fits both QYs, "forward only" fixes the QY of the back reaction to 0 (e.g. irradiation where the product does not absorb).
+  Thermal relaxation: choose the direction ("2nd -> 1st column" is cis -> trans for a trans/cis file) and enter the rate constant k = ln2 / t1/2 in s-1. k is fixed, not fitted; determine it separately in the dark at the same temperature.
+  Note: the time axis is the irradiation time. Thermal relaxation during dark periods (e.g. while a spectrum is recorded with the LED off) is not included.
+  Fitted parameters: both QYs and the initial composition. Uncertainties are 1 sigma from the fit and do not include the photon flux error.

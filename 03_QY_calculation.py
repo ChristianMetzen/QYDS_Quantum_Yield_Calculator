@@ -1,7 +1,23 @@
 """
 Quantum Yield Calculation — Ladányi method
-Based on: Ladányi et al., Photochem. Photobiol. Sci., 2017, 16, 1757–1763
+Based on: Ladányi et al., Photochem. Photobiol. Sci., 2017, 16, 1757–1761
 https://pubs.rsc.org/en/content/articlelanding/2017/pp/c7pp00315c
+
+Kinetic model (eqn 5/6 of the paper, written for species A = 1st column and
+B = 2nd column of the absorption coefficient file, path length 1 cm):
+
+    dc_A/dt = q/V * (1 - 10^-A_tot)/A_tot * (Phi_B*c_B*eps_B - Phi_A*c_A*eps_A)
+              + k_BA*c_B - k_AB*c_A
+    c_B     = c_0 - c_A
+    A_tot   = eps_A*c_A + eps_B*c_B
+
+q    : incident photon flux / mol s-1  (from 01a_Ferrioxalate_Actinometry.ipynb)
+V    : irradiated volume / L
+k_BA : thermal B -> A rate constant (e.g. cis -> trans), k_AB the reverse.
+       Only one of them is used (thermal relaxation goes one way).
+
+Fitted parameters: Phi_A (A->B), Phi_B (B->A) and the initial fraction x_A(0).
+c_0 is the mean of c_A + c_B over all spectra (as in the paper).
 """
 
 import os
@@ -14,11 +30,15 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from scipy import constants
 from scipy.optimize import curve_fit
-from scipy.integrate import solve_ivp
+from scipy.integrate import solve_ivp, trapezoid
+from scipy.interpolate import interp1d
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+
+SAVE_RC = {'font.size': 14}   # larger fonts for the saved 8x6 figures
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -45,34 +65,8 @@ def setup_logger(params):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Photon flux
+# LED / absorption coefficients
 # ─────────────────────────────────────────────────────────────────────────────
-
-CALIBRATION_DATA = {
-    "wavelength": [
-        260,270,280,290,300,310,320,330,340,350,360,370,380,390,400,
-        410,420,430,440,450,460,470,480,490,500,510,520,530,540,550,
-        560,570,580,590,600,610,620,630,640,650,660
-    ],
-    "high": [
-        10.042,9.892,9.493,8.934,8.301,7.654,7.036,6.467,5.956,5.503,
-        5.105,4.758,4.454,4.189,3.958,3.756,3.578,3.423,3.285,3.164,
-        3.056,2.960,2.874,2.797,2.727,2.663,2.605,2.552,2.502,2.455,
-        2.410,2.367,2.325,2.284,2.244,2.203,2.162,2.121,2.080,2.038,
-        1.995
-    ],
-    "low": [
-        0.502,0.495,0.475,0.447,0.415,0.383,0.352,0.323,0.298,0.275,
-        0.255,0.238,0.223,0.209,0.198,0.188,0.179,0.171,0.164,0.158,
-        0.153,0.148,0.144,0.140,0.136,0.133,0.130,0.128,0.125,0.123,
-        0.120,0.118,0.116,0.114,0.112,0.110,0.108,0.106,0.104,0.102,
-        0.100
-    ]
-}
-
-def get_correction_factor(wavelength, channel):
-    return np.interp(wavelength, CALIBRATION_DATA['wavelength'], CALIBRATION_DATA[channel])
-
 
 # ── LED lookup table (nominal WL -> (central WL nm, FWHM nm)) ────────────────
 LED_CATALOGUE = {
@@ -116,32 +110,58 @@ def effective_epsilon(wl_eps, eps_values, led_center, led_fwhm):
     mask  = (wl_eps >= led_center - 4*led_fwhm) & (wl_eps <= led_center + 4*led_fwhm)
     if mask.sum() < 2:
         return float(eps_values[np.abs(wl_eps - led_center).argmin()])
-    from scipy.integrate import trapezoid
     norm = trapezoid(S[mask], wl_eps[mask])
     return float(trapezoid(S[mask] * eps_values[mask], wl_eps[mask]) / norm)
 
-def calculate_photon_flux(params):
-    print_func = params['Print function']
-    logger     = params['logger']
-    wl         = params['Irradiation wavelength']
-    voltage    = params['Voltage after ref']
-    volume     = params['Volume']
-    cf         = get_correction_factor(wl, params['Channel'])
 
-    photon_flux_per_vol = wl * voltage * cf / (constants.Planck * constants.speed_of_light * constants.Avogadro * volume) * 1e-9
-    photon_flux         = photon_flux_per_vol * volume * 1e-3
-    abs_photon_flux     = photon_flux * constants.Avogadro
+def irradiation_epsilons(params):
+    """eps_A, eps_B at the irradiation wavelength (LED-weighted if FWHM > 0)."""
+    df  = params['Abs coeff df']
+    wl  = df.iloc[:, 0].to_numpy(dtype=float)
+    eA  = df.iloc[:, 1].to_numpy(dtype=float)
+    eB  = df.iloc[:, 2].to_numpy(dtype=float)
+    ctr = params['Irradiation wavelength']
+    fw  = params.get('LED FWHM', 0.0)
+    if fw > 0:
+        return effective_epsilon(wl, eA, ctr, fw), effective_epsilon(wl, eB, ctr, fw)
+    i = np.abs(wl - ctr).argmin()
+    return float(eA[i]), float(eB[i])
 
-    print_func(f'Correction factor  = {cf:.2f} mW V\u207b\u00b9')
-    print_func('Photon flux        = {:.2e} mol s\u207b\u00b9 L\u207b\u00b9 / {:.2e} mol s\u207b\u00b9 / {:.2e} s\u207b\u00b9'.format(
-        photon_flux_per_vol, photon_flux, abs_photon_flux))
-    logger.info(f'Correction factor = {cf:.2f} mW V-1')
-    logger.info(f'Photon flux = {photon_flux_per_vol:.4e} mol s-1 L-1 / {photon_flux:.4e} mol s-1 / {abs_photon_flux:.4e} s-1')
 
-    params['Photon flux per vol'] = photon_flux_per_vol
-    params['Photon flux']         = photon_flux
-    params['Abs photon flux']     = abs_photon_flux
-    return params
+# ─────────────────────────────────────────────────────────────────────────────
+# Kinetic model (shared by fit and plot)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def thermal_rates(params):
+    """Return (k_AB, k_BA) in s-1 from the thermal relaxation setting."""
+    k   = params.get('Thermal k', 0.0)
+    mode = params.get('Thermal relaxation', 'none')
+    if mode == 'B->A':
+        return 0.0, k
+    if mode == 'A->B':
+        return k, 0.0
+    return 0.0, 0.0
+
+
+def simulate_xA(times, phi_A, phi_B, xA0, c0, e_A, e_B, q_per_V, k_AB, k_BA):
+    """Solve the Ladányi ODE for the fraction x_A = c_A/c_0.
+
+    Solved in fractions (order 1) instead of mol/L (order 1e-5), so the default
+    absolute tolerance of the solver does not swamp the solution.
+    """
+    def rhs(t, y):
+        xA = y[0]
+        xB = 1.0 - xA
+        A  = c0 * (e_A * xA + e_B * xB)
+        F  = np.log(10) if A <= 1e-12 else (1 - 10**(-A)) / A   # limit A -> 0
+        return [q_per_V * F * (phi_B * xB * e_B - phi_A * xA * e_A)
+                + k_BA * xB - k_AB * xA]
+
+    sol = solve_ivp(rhs, (times[0], times[-1]), y0=[xA0], t_eval=times,
+                    method="LSODA", rtol=1e-8, atol=1e-10)
+    if not sol.success:
+        raise RuntimeError(f"ODE solver failed: {sol.message}")
+    return sol.y[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -149,261 +169,193 @@ def calculate_photon_flux(params):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def calculate_concentration_profile(params):
-    """Convert absorbance vs time into concentration profiles using absorption coefficients.
+    """Convert absorbance vs time into concentrations c_A, c_B.
 
-    For spectra series: uses the same weighted analytical formula as the E-step
-    in the microgel iterative fit:
-        x_B(lambda) = (A(lambda) - c*eps_A(lambda)) / (c*(eps_B - eps_A)(lambda))
-    averaged over [Concentration WL min, Concentration WL max],
-    weighted by |eps_B - eps_A|, clipped to [0, 1].
-    For single-wavelength kinetics: falls back to the analytical single-point formula.
+    Spectra series: two-component linear least squares in the selected
+    wavelength range, A(λ) = eps_A(λ)*c_A + eps_B(λ)*c_B (d = 1 cm), done
+    independently for every spectrum. No total concentration is needed;
+    c_0 is taken as the mean of c_A + c_B (as in the paper).
+
+    Single-wavelength kinetics: x_B from the absorbance at the observation
+    wavelength and the entered total concentration.
     """
-    from scipy.interpolate import interp1d as _interp1d
-
+    print_func   = params['Print function']
     df_kinetics  = params['Kinetics df']
     df_abs_coeff = params['Abs coeff df']
-    c            = params['Concentration']
-    wl_min       = params['Concentration WL min']
-    wl_max       = params['Concentration WL max']
     time         = df_kinetics.columns[1:].astype(float).to_numpy()
-    has_spectra  = params['Has spectra']
 
     wl_eps = df_abs_coeff.iloc[:, 0].to_numpy(dtype=float)
     eps_A  = df_abs_coeff.iloc[:, 1].to_numpy(dtype=float)
     eps_B  = df_abs_coeff.iloc[:, 2].to_numpy(dtype=float)
 
-    if has_spectra:
+    if params['Has spectra']:
         wl_obs = df_kinetics.iloc[:, 0].to_numpy(dtype=float)
+        wl_lo  = max(wl_obs.min(), wl_eps.min(), params['Concentration WL min'])
+        wl_hi  = min(wl_obs.max(), wl_eps.max(), params['Concentration WL max'])
+        mask   = (wl_obs >= wl_lo) & (wl_obs <= wl_hi)
+        if mask.sum() < 2:
+            raise ValueError("Less than 2 wavelengths in the concentration range.")
 
-        wl_lo  = max(wl_obs.min(), wl_eps.min(), wl_min)
-        wl_hi  = min(wl_obs.max(), wl_eps.max(), wl_max)
-        wl_fit = wl_obs[(wl_obs >= wl_lo) & (wl_obs <= wl_hi)]
+        E = np.column_stack([interp1d(wl_eps, eps_A)(wl_obs[mask]),
+                             interp1d(wl_eps, eps_B)(wl_obs[mask])])
+        A_mat = df_kinetics.iloc[:, 1:].to_numpy(dtype=float)[mask]   # n_wl x n_t
+        conc, *_ = np.linalg.lstsq(E, A_mat, rcond=None)
+        c_A, c_B = conc
+        resid = A_mat - E @ conc
+        rms   = np.sqrt(np.mean(resid**2))
+        c0    = float(np.mean(c_A + c_B))
 
-        eps_A_fit = _interp1d(wl_eps, eps_A, kind='cubic',
-                               fill_value='extrapolate')(wl_fit)
-        eps_B_fit = _interp1d(wl_eps, eps_B, kind='cubic',
-                               fill_value='extrapolate')(wl_fit)
-
-        delta_eps = eps_B_fit - eps_A_fit
-        weight    = np.abs(delta_eps)
-
-        x_B_arr         = []
-        absorbance_list = []
-        for col_idx in range(1, df_kinetics.shape[1]):
-            A = _interp1d(wl_obs, df_kinetics.iloc[:, col_idx].to_numpy(dtype=float),
-                          kind='linear', bounds_error=False,
-                          fill_value=np.nan)(wl_fit)
-            num    = A - c * eps_A_fit
-            den    = c * delta_eps
-            x_wl   = np.where(np.abs(den) > 1e-12, num / den, np.nan)
-            x_clip = np.clip(x_wl, 0, 1)
-            fin    = np.isfinite(x_clip)
-            x_B_arr.append(
-                float(np.average(x_clip[fin], weights=weight[fin]))
-                if fin.any() else np.nan
-            )
-            absorbance_list.append(np.nanmean(A))
-
-        x_B        = np.clip(np.array(x_B_arr), 0, 1)
-        absorbance = np.array(absorbance_list)
-
+        print_func(f"Concentrations: 2-component LSQ, {wl_lo:.0f}-{wl_hi:.0f} nm, "
+                   f"RMS residual = {rms:.2e}")
+        print_func(f"c0 (mean c_A + c_B) = {c0*1e6:.2f} µM "
+                   f"(spread {np.std(c_A + c_B)/c0*100:.1f} %)")
+        params['logger'].info(f"LSQ concentrations: range {wl_lo}-{wl_hi} nm, "
+                              f"RMS {rms:.3e}, c0 = {c0*1e6:.3f} uM")
     else:
-        mask_eps   = (wl_eps >= wl_min) & (wl_eps <= wl_max)
-        e_A        = float(np.nanmean(eps_A[mask_eps]))
-        e_B        = float(np.nanmean(eps_B[mask_eps]))
-        absorbance = df_kinetics.iloc[0, 1:].to_numpy(dtype=float)
-        x_B        = np.clip((absorbance - c * e_A) / (c * (e_B - e_A)), 0, 1)
+        wl_obs = float(df_kinetics.iloc[0, 0])
+        e_A    = float(np.interp(wl_obs, wl_eps, eps_A))
+        e_B    = float(np.interp(wl_obs, wl_eps, eps_B))
+        c0     = params['Concentration']
+        A      = df_kinetics.iloc[0, 1:].to_numpy(dtype=float)
+        x_B    = (A - c0 * e_A) / (c0 * (e_B - e_A))
+        c_B    = x_B * c0
+        c_A    = c0 - c_B
+        print_func(f"Concentrations from single wavelength {wl_obs:.0f} nm, "
+                   f"c0 = {c0*1e6:.2f} µM (entered)")
 
-    x_A = 1 - x_B
-
-    # c_A always = column 1 species, c_B always = column 2 species.
-    # No swap — this keeps c_A/c_B consistent with e_A/e_B in the ODE.
     names = [df_abs_coeff.columns[1], df_abs_coeff.columns[2]]
-    c_A, c_B = x_A * c * 1e6, x_B * c * 1e6
-
-    df_conc = pd.DataFrame({'time / s': time, 'c_A / uM': c_A, 'c_B / uM': c_B})
-    df_conc.to_csv(os.path.join(params['Results Folder'], f"{params['Basename']}_conc.csv"), index=False)
+    df_conc = pd.DataFrame({'time / s': time, 'c_A / uM': c_A * 1e6, 'c_B / uM': c_B * 1e6})
+    df_conc.to_csv(os.path.join(params['Results Folder'], f"{params['Basename']}_conc.csv"),
+                   index=False)
 
     params['Names']   = names
     params['Conc df'] = df_conc
+    params['c0']      = c0
     return params
 
 
-def report_cis_fraction(params):
-    """Print and log the cis and trans fractions at t=0 and at PSS (last time point)."""
+def report_fractions(params):
+    """Print and log the fractions of both species at t=0 and at the last point."""
     print_func = params['Print function']
-    logger     = params['logger']
     df_conc    = params['Conc df']
-    names      = params['Names']   # names[0] = dominant at t=0, names[1] = builds up under irradiation
-
+    nA, nB     = params['Names']
     c_A = df_conc['c_A / uM'].to_numpy()
     c_B = df_conc['c_B / uM'].to_numpy()
-    c_total = c_A + c_B
-
-    # Always report both cis and trans fractions with fixed labels.
-    # names[0] is the species dominant at t=0; names[1] builds up.
-    # We identify which name contains 'cis' or 'trans' to assign labels correctly.
-    name_A, name_B = names[0], names[1]
-    frac_A_initial = c_A[0]  / c_total[0]  * 100
-    frac_B_initial = c_B[0]  / c_total[0]  * 100
-    frac_A_pss     = c_A[-1] / c_total[-1] * 100
-    frac_B_pss     = c_B[-1] / c_total[-1] * 100
-
-    print_func(f"Fraction {name_B} (cis) at t=0 : {frac_B_initial:.1f} %")
-    print_func(f"Fraction {name_B} (cis) at PSS : {frac_B_pss:.1f} %")
-    logger.info(f"{name_A} fraction — t=0: {frac_A_initial:.2f} %, PSS: {frac_A_pss:.2f} %")
-    logger.info(f"{name_B} fraction — t=0: {frac_B_initial:.2f} %, PSS: {frac_B_pss:.2f} %")
-
-    params['Cis fraction initial'] = frac_B_initial if 'cis' in name_B.lower() else frac_A_initial
-    params['Cis fraction PSS']     = frac_B_pss     if 'cis' in name_B.lower() else frac_A_pss
+    tot = c_A + c_B
+    for name, c in ((nA, c_A), (nB, c_B)):
+        f0, f1 = c[0] / tot[0] * 100, c[-1] / tot[-1] * 100
+        print_func(f"Fraction {name}: t=0 {f0:.1f} %, last point {f1:.1f} %")
+        params['logger'].info(f"{name} fraction: t=0 {f0:.2f} %, last {f1:.2f} %")
     return params
 
 
 def ladanyi_fit(params):
-    """Fit concentration profiles to the Ladányi ODE model to extract quantum yields."""
+    """Fit the Ladányi ODE (incl. optional thermal relaxation) to c_A(t)."""
     print_func = params['Print function']
     logger     = params['logger']
-    V          = params['Volume'] * 1e-3
-    I0         = params['Abs photon flux']
     df_conc    = params['Conc df']
-    df_abs_coeff = params['Abs coeff df']
-    names      = params['Names']
+    nA, nB     = params['Names']
+    c0         = params['c0']
+    q_per_V    = params['Photon flux'] / (params['Volume'] * 1e-3)   # mol s-1 L-1
+    e_A, e_B   = irradiation_epsilons(params)
+    k_AB, k_BA = thermal_rates(params)
 
-    _wl_eps_arr = df_abs_coeff.iloc[:, 0].to_numpy(dtype=float)
-    _eps_A_arr  = df_abs_coeff.iloc[:, 1].to_numpy(dtype=float)
-    _eps_B_arr  = df_abs_coeff.iloc[:, 2].to_numpy(dtype=float)
-    _led_center = params['Irradiation wavelength']
-    _led_fwhm   = params.get('LED FWHM', 0.0)
-    if _led_fwhm > 0:
-        e_A = effective_epsilon(_wl_eps_arr, _eps_A_arr, _led_center, _led_fwhm)
-        e_B = effective_epsilon(_wl_eps_arr, _eps_B_arr, _led_center, _led_fwhm)
-    else:
-        wl_idx = np.abs(_wl_eps_arr - _led_center).argmin()
-        e_A    = float(_eps_A_arr[wl_idx])
-        e_B    = float(_eps_B_arr[wl_idx])
-
-    c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
-    c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
     times = df_conc['time / s'].to_numpy()
-    cA0, cB0 = c_A[0], c_B[0]
+    x_A   = df_conc['c_A / uM'].to_numpy() * 1e-6 / c0
+    x_B   = 1 - x_A
 
-    # ── Fit direction ─────────────────────────────────────────────────────────
-    # 'both'         : fit forward (educt->product) and backward (product->educt)
-    # 'forward_only' : only the forward reaction occurs (no back-isomerisation at
-    #                  this wavelength, e.g. 645 nm). The reverse QY is fixed to 0.
-    #
-    # Which species is the "product" is determined purely from the data: the
-    # product is whichever species' concentration increases under irradiation.
-    # This is species-agnostic (works beyond azobenzenes).
-    fit_direction = params.get('Fit direction', 'both')
-    product_is_B  = (c_B[-1] - c_B[0]) >= (c_A[-1] - c_A[0])   # B builds up?
-    forward_only  = (fit_direction == 'forward_only')
+    print_func(f"ε({nA}) = {e_A:.0f}, ε({nB}) = {e_B:.0f} L mol⁻¹ cm⁻¹ "
+               f"at irradiation")
+    if k_AB or k_BA:
+        d = f"{nA}→{nB}" if k_AB else f"{nB}→{nA}"
+        print_func(f"Thermal relaxation {d}: k = {max(k_AB, k_BA):.3e} s⁻¹ (fixed)")
 
-    # Names for the forward / reverse reactions (forward = educt -> product)
-    if product_is_B:
-        fwd_label, rev_label = f"{names[0]}\u2192{names[1]}", f"{names[1]}\u2192{names[0]}"
-    else:
-        fwd_label, rev_label = f"{names[1]}\u2192{names[0]}", f"{names[0]}\u2192{names[1]}"
+    # ── Direction ────────────────────────────────────────────────────────────
+    product_is_B = (x_B[-1] - x_B[0]) >= 0
+    forward_only = params.get('Fit direction', 'both') == 'forward_only'
 
-    # Linear least-squares pre-estimate for initial guess.
-    # Derived directly from the ODE so the units match exactly:
-    #   dcA/dt = P * (phi_B*cB*eB - phi_A*cA*eA),
-    #   P = I0/(V*NA) * (1 - 10^-A_tot)/A_tot   (same prefactor as dcA_dt below)
-    # Discretising dcA/dt ≈ ΔcA/Δt and evaluating P, cA, cB at interval midpoints
-    # gives a linear system in [phi_A, phi_B]:
-    #   ΔcA/Δt = (-P_m*eA*cA_m) * phi_A + (P_m*eB*cB_m) * phi_B
-    dc_A  = np.diff(c_A)
-    dt    = np.diff(times)
-    c_A_m = 0.5 * (c_A[:-1] + c_A[1:])
-    c_B_m = 0.5 * (c_B[:-1] + c_B[1:])
-    A_m   = e_A * c_A_m + e_B * c_B_m
-
-    # Prefactor P evaluated at the midpoints — identical grouping to the ODE
+    # ── Linear pre-estimate (eqn 7) ──────────────────────────────────────────
+    xA_m = 0.5 * (x_A[:-1] + x_A[1:])
+    xB_m = 1 - xA_m
+    A_m  = c0 * (e_A * xA_m + e_B * xB_m)
     with np.errstate(divide='ignore', invalid='ignore'):
-        P_m = (I0 / (V * constants.Avogadro)) * (1 - 10**(-A_m)) / A_m
+        P_m = q_per_V * (1 - 10**(-A_m)) / A_m
+    y = np.diff(x_A) / np.diff(times) - (k_BA * xB_m - k_AB * xA_m)
+    X = np.column_stack([-P_m * e_A * xA_m, P_m * e_B * xB_m])
+    ok = np.isfinite(y) & np.isfinite(X).all(axis=1)
+    est, *_ = np.linalg.lstsq(X[ok], y[ok], rcond=None)
+    phi_A0, phi_B0 = np.clip(est, 1e-4, 1.0)
+    print_func(f"Pre-estimate: Φ({nA}→{nB})≈{phi_A0:.3f}, "
+               f"Φ({nB}→{nA})≈{phi_B0:.3f}")
 
-    dcA_dt_meas = dc_A / dt                       # measured rate of change
-    X = np.column_stack([-P_m * e_A * c_A_m,      # coefficient of phi_A
-                          P_m * e_B * c_B_m])     # coefficient of phi_B
-    y = dcA_dt_meas
-
-    finite_mask = np.isfinite(y) & np.isfinite(X).all(axis=1)
-    Phi_est, *_ = np.linalg.lstsq(X[finite_mask], y[finite_mask], rcond=None)
-    # Clip the pre-estimate to physically plausible quantum yields [0, 1]
-    phi_A_guess = float(np.clip(Phi_est[0], 0.0, 1.0))
-    phi_B_guess = float(np.clip(Phi_est[1], 0.0, 1.0))
-    print_func(f"Pre-estimate: \u03a6({names[0]}\u2192{names[1]})\u2248{phi_A_guess:.3f}, "
-               f"\u03a6({names[1]}\u2192{names[0]})\u2248{phi_B_guess:.3f}")
-    if forward_only:
-        print_func(f"Fit direction: forward only \u2014 fixing reverse QY \u03a6({rev_label}) = 0")
-        logger.info(f"Fit direction: forward only; reverse QY ({rev_label}) fixed to 0")
-
-    def dcA_dt(t, y, phi_A, phi_B):
-        cA, cB = y
-        A_tot  = cA * e_A + cB * e_B
-        if A_tot <= 0:
-            return [0.0, 0.0]
-        prefactor = I0 / (V * constants.Avogadro)
-        dcA = prefactor * (1 - 10**(-A_tot)) / A_tot * (phi_B * cB * e_B - phi_A * cA * e_A)
-        return [dcA, -dcA]
-
+    # ── Full fit: free parameters depend on direction ────────────────────────
+    # free = which of (phi_A, phi_B) are fitted; the reverse QY is fixed to 0
+    # in 'forward only' mode (reverse QY = QY of the product species).
     if not forward_only:
-        # Fit both quantum yields.
-        def model(times, phi_A, phi_B):
-            sol = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
-                            t_eval=times, args=(phi_A, phi_B), method="LSODA")
-            return sol.y[0]
-        popt, _ = curve_fit(model, times, c_A, p0=[phi_A_guess, phi_B_guess])
-        phi_A_fit, phi_B_fit = popt
+        free = [True, True]
     else:
-        # Forward only: the reverse (product -> educt) QY is fixed to 0.
-        # 'product' is the species that builds up; in the A/B ODE the reverse
-        # term carries the QY of whichever species is the product:
-        #   product = B -> reverse QY is phi_B  -> fix phi_B = 0, fit phi_A
-        #   product = A -> reverse QY is phi_A  -> fix phi_A = 0, fit phi_B
-        if product_is_B:
-            def model(times, phi_fwd):
-                sol = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
-                                t_eval=times, args=(phi_fwd, 0.0), method="LSODA")
-                return sol.y[0]
-            popt, _ = curve_fit(model, times, c_A, p0=[phi_A_guess])
-            phi_A_fit, phi_B_fit = float(popt[0]), 0.0
-        else:
-            def model(times, phi_fwd):
-                sol = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
-                                t_eval=times, args=(0.0, phi_fwd), method="LSODA")
-                return sol.y[0]
-            popt, _ = curve_fit(model, times, c_A, p0=[phi_B_guess])
-            phi_A_fit, phi_B_fit = 0.0, float(popt[0])
+        free = [product_is_B, not product_is_B]
+        rev = f"{nB}→{nA}" if product_is_B else f"{nA}→{nB}"
+        print_func(f"Forward only: Φ({rev}) fixed to 0")
+        logger.info(f"Forward only: QY {rev} fixed to 0")
 
-    print_func(f"\u03a6({names[0]}\u2192{names[1]}) = {phi_A_fit:.4e}  ({phi_A_fit*100:.2f} %)")
-    print_func(f"\u03a6({names[1]}\u2192{names[0]}) = {phi_B_fit:.4e}  ({phi_B_fit*100:.2f} %)")
-    logger.info(f'QY {names[0]}->{names[1]} = {phi_A_fit:.4e} ({phi_A_fit*100:.2f} %), '
-                f'{names[1]}->{names[0]} = {phi_B_fit:.4e} ({phi_B_fit*100:.2f} %)')
+    def unpack(p):
+        phis, i = [0.0, 0.0], 0
+        for j in range(2):
+            if free[j]:
+                phis[j] = p[i]; i += 1
+        return phis[0], phis[1], p[i]
 
-    params['Ladanyi QY A->B'] = phi_A_fit
-    params['Ladanyi QY B->A'] = phi_B_fit
+    def model(t, *p):
+        phi_A, phi_B, xA0 = unpack(p)
+        return simulate_xA(t, phi_A, phi_B, xA0, c0, e_A, e_B, q_per_V, k_AB, k_BA)
 
-    cA_fit = model(times, popt[0]) if forward_only else model(times, phi_A_fit, phi_B_fit)
-    pd.DataFrame({'time / s': times, 'cA exp': c_A, 'cA fit': cA_fit}).to_csv(
-        os.path.join(params['Results Folder'], f"{params['Basename']}_ladanyi_fit.csv"), index=False)
+    p0 = [g for g, f in zip((phi_A0, phi_B0), free) if f] + [float(np.clip(x_A[0], 0, 1))]
+    nphi = sum(free)
+    bounds = ([0.0] * nphi + [0.0], [1.0] * nphi + [1.0])
+    popt, pcov = curve_fit(model, times, x_A, p0=p0, bounds=bounds)
+    perr = np.sqrt(np.diag(pcov))
 
+    phi_A, phi_B, xA0 = unpack(popt)
+    err_A, err_B, _   = unpack(perr)
+    if not free[0]: err_A = 0.0
+    if not free[1]: err_B = 0.0
+
+    print_func(f"\nΦ({nA}→{nB}) = {phi_A:.4f} ± {err_A:.4f}")
+    print_func(f"Φ({nB}→{nA}) = {phi_B:.4f} ± {err_B:.4f}")
+    print_func(f"x({nA}) at t=0 (fitted) = {xA0*100:.1f} %")
+    print_func("(± = 1σ from the fit covariance, not including photon flux error)")
+    logger.info(f"QY {nA}->{nB} = {phi_A:.5f} +- {err_A:.5f}, "
+                f"{nB}->{nA} = {phi_B:.5f} +- {err_B:.5f}, xA0 = {xA0:.4f}")
+
+    # Fit curves for the plot (smooth) and for export (at data points)
+    t_smooth  = np.linspace(times[0], times[-1], 400)
+    xA_smooth = model(t_smooth, *popt)
+    xA_fit    = model(times, *popt)
+    pd.DataFrame({'time / s': times,
+                  'c_A exp / uM': x_A * c0 * 1e6,
+                  'c_A fit / uM': xA_fit * c0 * 1e6}).to_csv(
+        os.path.join(params['Results Folder'], f"{params['Basename']}_ladanyi_fit.csv"),
+        index=False)
+
+    params['Ladanyi QY A->B'] = phi_A
+    params['Ladanyi QY B->A'] = phi_B
+    params['Ladanyi t_smooth'] = t_smooth
+    params['Ladanyi cA_smooth'] = xA_smooth * c0 * 1e6
+    params['Ladanyi cB_smooth'] = (1 - xA_smooth) * c0 * 1e6
     return params
 
 
 def fit_photoswitching_kinetics(params):
-    """Fit a mono-exponential buildup curve to extract k, t1/2 and p1/2 (Note 7).
+    """Fit a mono-exponential buildup curve to extract k, t1/2 and p1/2.
 
     Model:  c_B(t) = c_B_PSS - (c_B_PSS - c_B0) * exp(-k * t)
-    t1/2  = ln(2) / k                       (isomerization half-time)
-    p1/2  = t1/2 * I(lambda)                (half-power, light-source independent)
-    I(lambda) is the total incident optical power at the irradiation wavelength,
-    obtained directly from the calibration (voltage * correction factor), in mW.
+    t1/2  = ln(2) / k
+    p1/2  = t1/2 * P   with P the incident optical power from the photon flux.
     """
     print_func = params['Print function']
-    logger     = params['logger']
     df_conc    = params['Conc df']
-    names      = params['Names']
+    nB         = params['Names'][1]
 
     times = df_conc['time / s'].to_numpy()
     c_B   = df_conc['c_B / uM'].to_numpy()
@@ -412,43 +364,39 @@ def fit_photoswitching_kinetics(params):
     def model(t, k, cB_pss):
         return cB_pss - (cB_pss - cB0) * np.exp(-k * t)
 
-    k_guess  = 1.0 / times[-1] if times[-1] > 0 else 1.0
-    p0       = [k_guess, c_B[-1]]
-    popt, _  = curve_fit(model, times, c_B, p0=p0, maxfev=10000)
+    k_guess = 1.0 / times[-1] if times[-1] > 0 else 1.0
+    popt, _ = curve_fit(model, times, c_B, p0=[k_guess, c_B[-1]], maxfev=10000)
     k_fit, cB_pss_fit = popt
-    t_half   = np.log(2) / k_fit
+    t_half = np.log(2) / k_fit
 
-    # I(lambda): total incident optical power, independent of volume/Avogadro
-    # normalisation — directly from the calibration (voltage * correction factor).
-    wl         = params['Irradiation wavelength']
-    cf         = get_correction_factor(wl, params['Channel'])
-    I_power_mW = params['Voltage after ref'] * cf
-    p_half_mJ  = t_half * I_power_mW   # s * mW = mJ
+    # Optical power P = q * NA * h * c / λ, in mW
+    wl_m       = params['Irradiation wavelength'] * 1e-9
+    I_power_mW = (params['Photon flux'] * constants.Avogadro * constants.Planck
+                  * constants.speed_of_light / wl_m * 1e3)
+    p_half_mJ  = t_half * I_power_mW
 
-    print_func(f"\nPhotoswitching kinetics ({names[1]} buildup, mono-exponential fit):")
-    print_func(f"  k     = {k_fit:.4e} s\u207b\u00b9")
+    print_func(f"\nPhotoswitching kinetics ({nB} buildup, mono-exponential fit):")
+    print_func(f"  k     = {k_fit:.4e} s⁻¹")
     print_func(f"  t1/2  = {t_half:.2f} s")
-    print_func(f"  I(\u03bb)  = {I_power_mW:.2f} mW")
+    print_func(f"  P     = {I_power_mW:.2f} mW")
     print_func(f"  p1/2  = {p_half_mJ:.2f} mJ")
-    logger.info(f"Kinetics fit: k={k_fit:.4e} s-1, t1/2={t_half:.3f} s, "
-                f"I(lambda)={I_power_mW:.3f} mW, p1/2={p_half_mJ:.3f} mJ")
+    params['logger'].info(f"Kinetics fit: k={k_fit:.4e} s-1, t1/2={t_half:.3f} s, "
+                          f"P={I_power_mW:.3f} mW, p1/2={p_half_mJ:.3f} mJ")
 
-    cB_fit_curve = model(times, k_fit, cB_pss_fit)
-    pd.DataFrame({'time / s': times, 'cB exp / uM': c_B, 'cB fit / uM': cB_fit_curve}).to_csv(
-        os.path.join(params['Results Folder'], f"{params['Basename']}_kinetics_fit.csv"), index=False)
+    pd.DataFrame({'time / s': times, 'cB exp / uM': c_B,
+                  'cB fit / uM': model(times, k_fit, cB_pss_fit)}).to_csv(
+        os.path.join(params['Results Folder'], f"{params['Basename']}_kinetics_fit.csv"),
+        index=False)
 
-    # Smooth curve for plotting
-    t_smooth  = np.linspace(times[0], times[-1], 400)
-    cB_smooth = model(t_smooth, k_fit, cB_pss_fit)
-
-    params['k']             = k_fit
-    params['t_half / s']    = t_half
-    params['I_lambda / mW'] = I_power_mW
-    params['p_half / mJ']   = p_half_mJ
+    t_smooth = np.linspace(times[0], times[-1], 400)
+    params['k']                  = k_fit
+    params['t_half / s']         = t_half
+    params['I_lambda / mW']      = I_power_mW
+    params['p_half / mJ']        = p_half_mJ
     params['Kinetics times']     = times
     params['Kinetics cB']        = c_B
     params['Kinetics t_smooth']  = t_smooth
-    params['Kinetics cB_smooth'] = cB_smooth
+    params['Kinetics cB_smooth'] = model(t_smooth, k_fit, cB_pss_fit)
     params['Kinetics cB_pss']    = cB_pss_fit
     return params
 
@@ -458,27 +406,20 @@ def run_analysis(params):
     logger     = params['logger']
     print_func = params['Print function']
     logger.info('Starting Ladányi QY analysis')
-    _led_name   = params.get('LED name', 'Custom')
-    _led_center = params['Irradiation wavelength']
-    _led_fwhm   = params.get('LED FWHM', 0.0)
-    params['LED central wavelength'] = _led_center
-    params['LED FWHM'] = _led_fwhm
-    print_func(f'LED: {_led_name}')
-    print_func(f'     central WL = {_led_center:.0f} nm,  FWHM = {_led_fwhm:.0f} nm')
-    logger.info(f'LED: {_led_name}, central WL={_led_center:.0f} nm, FWHM={_led_fwhm:.0f} nm')
-    logger.info(f"Irradiation: {params['Irradiation wavelength']} nm, "
-                f"channel: {params['Channel']}, voltage: {params['Voltage after ref']} V")
-    logger.info(f"Concentration WL range: {params['Concentration WL min']}-{params['Concentration WL max']} nm")
-    logger.info(f"Volume: {params['Volume']} mL, concentration: {params['Concentration']*1e6:.1f} µM")
-    logger.info(f"Fit direction: {params.get('Fit direction', 'both')}")
+    print_func(f"LED: {params.get('LED name', 'Custom')}")
+    print_func(f"     central WL = {params['Irradiation wavelength']:.0f} nm,  "
+               f"FWHM = {params.get('LED FWHM', 0.0):.0f} nm")
+    print_func(f"Photon flux = {params['Photon flux']:.3e} mol s⁻¹, "
+               f"V = {params['Volume']} mL")
+    for key in ('LED name', 'Irradiation wavelength', 'LED FWHM', 'Photon flux', 'Volume',
+                'Concentration WL min', 'Concentration WL max', 'Fit direction',
+                'Thermal relaxation', 'Thermal k'):
+        logger.info(f"{key}: {params.get(key)}")
 
-    calculate_photon_flux(params)
-
-    df_abs_coeff = pd.read_csv(params['Abs coeff file'])
-    params['Abs coeff df'] = df_abs_coeff
+    params['Abs coeff df'] = pd.read_csv(params['Abs coeff file'])
 
     calculate_concentration_profile(params)
-    report_cis_fraction(params)
+    report_fractions(params)
     fit_photoswitching_kinetics(params)
     ladanyi_fit(params)
     return params
@@ -491,20 +432,17 @@ def run_analysis(params):
 def plotting_spectra(params, ax):
     df        = params['Kinetics df']
     times     = df.columns[1:].astype(float).to_numpy()
-    palette   = params['Color palette']
     ymin, ymax = params['Plotting A_min'], params['Plotting A_max']
     xmin, xmax = params['Plotting wl_min'], params['Plotting wl_max']
 
-    cmap       = plt.get_cmap(palette)
-    norm       = mcolors.Normalize(vmin=times[0], vmax=times[-1])
-    colors     = [cmap(norm(t)) for t in times]
-
-    for i, col in enumerate(df.columns[1:]):
-        ax.plot(df.iloc[:, 0], df[col], color=colors[i])
+    cmap = plt.get_cmap(params['Color palette'])
+    norm = mcolors.Normalize(vmin=times[0], vmax=times[-1])
+    for t, col in zip(times, df.columns[1:]):
+        ax.plot(df.iloc[:, 0], df[col], color=cmap(norm(t)))
 
     sm = cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
-    plt.colorbar(sm, ax=ax, label='irradiation time / s')
+    ax.figure.colorbar(sm, ax=ax, label='irradiation time / s')
 
     ax.set_xlabel('wavelength / nm')
     ax.set_ylabel('absorbance')
@@ -515,79 +453,37 @@ def plotting_spectra(params, ax):
 
 
 def plotting_conc_and_fit(params, ax):
-    """Combined plot: concentration profiles (scatter) with Ladányi fit overlaid."""
-    V            = params['Volume'] * 1e-3
-    I0           = params['Abs photon flux']
-    df_conc      = params['Conc df']
-    df_abs_coeff = params['Abs coeff df']
-    names        = params['Names']
-    t_min        = params['Plotting t_min']
-    t_max        = params['Plotting t_max']
+    """Concentration profiles (scatter) with the Ladányi fit overlaid."""
+    df_conc = params['Conc df']
+    nA, nB  = params['Names']
+    times   = df_conc['time / s'].to_numpy()
+    t_s     = params['Ladanyi t_smooth']
 
-    _wl_eps_arr = df_abs_coeff.iloc[:, 0].to_numpy(dtype=float)
-    _eps_A_arr  = df_abs_coeff.iloc[:, 1].to_numpy(dtype=float)
-    _eps_B_arr  = df_abs_coeff.iloc[:, 2].to_numpy(dtype=float)
-    _led_center = params['Irradiation wavelength']
-    _led_fwhm   = params.get('LED FWHM', 0.0)
-    if _led_fwhm > 0:
-        e_A = effective_epsilon(_wl_eps_arr, _eps_A_arr, _led_center, _led_fwhm)
-        e_B = effective_epsilon(_wl_eps_arr, _eps_B_arr, _led_center, _led_fwhm)
-    else:
-        wl_idx = np.abs(_wl_eps_arr - _led_center).argmin()
-        e_A    = float(_eps_A_arr[wl_idx])
-        e_B    = float(_eps_B_arr[wl_idx])
-
-    c_A   = df_conc['c_A / uM'].to_numpy() * 1e-6
-    c_B   = df_conc['c_B / uM'].to_numpy() * 1e-6
-    times = df_conc['time / s'].to_numpy()
-    cA0, cB0 = c_A[0], c_B[0]
-    phi_A = params['Ladanyi QY A->B']
-    phi_B = params['Ladanyi QY B->A']
-
-    def dcA_dt(t, y, phi_A, phi_B):
-        cA, cB = y
-        A_tot  = cA * e_A + cB * e_B
-        if A_tot <= 0: return [0.0, 0.0]
-        prefactor = I0 / (V * constants.Avogadro)
-        dcA = prefactor * (1 - 10**(-A_tot)) / A_tot * (phi_B * cB * e_B - phi_A * cA * e_A)
-        return [dcA, -dcA]
-
-    sol    = solve_ivp(dcA_dt, (times[0], times[-1]), y0=[cA0, cB0],
-                       t_eval=times, args=(phi_A, phi_B), method="LSODA")
-    cA_fit = sol.y[0]
-    cB_fit = (cA0 + cB0) - cA_fit   # mass balance in mol/L, convert below
-
-    # Scatter points
-    ax.scatter(times, c_A * 1e6, color='C0', s=12, zorder=2, label=names[0])
-    ax.scatter(times, c_B * 1e6, color='C1', s=12, zorder=2, label=names[1])
-    # Fit lines overlaid in matching colours
-    ax.plot(times, cA_fit * 1e6, color='C0', linewidth=1.5, zorder=3)
-    ax.plot(times, cB_fit * 1e6, color='black', linewidth=1.5, zorder=3, label='fit')
+    ax.scatter(times, df_conc['c_A / uM'], color='C0', s=12, zorder=2, label=nA)
+    ax.scatter(times, df_conc['c_B / uM'], color='C1', s=12, zorder=2, label=nB)
+    ax.plot(t_s, params['Ladanyi cA_smooth'], color='C0', lw=1.5, zorder=3)
+    ax.plot(t_s, params['Ladanyi cB_smooth'], color='C1', lw=1.5, zorder=3)
+    ax.plot([], [], color='black', lw=1.5, label='fit')
 
     ax.set_xlabel('irradiation time / s')
     ax.set_ylabel('concentration / µM')
-    if t_min != 0: ax.set_xlim(left=t_min)
-    if t_max != 0: ax.set_xlim(right=t_max)
+    if params['Plotting t_min'] != 0: ax.set_xlim(left=params['Plotting t_min'])
+    if params['Plotting t_max'] != 0: ax.set_xlim(right=params['Plotting t_max'])
     ax.legend()
 
 
 def plotting_kinetics_fit(params, ax):
-    """Plot the photoswitching kinetics: c_B(t) data with mono-exponential fit,
-    annotated with k, t1/2 and p1/2."""
-    times     = params['Kinetics times']
-    c_B       = params['Kinetics cB']
-    t_smooth  = params['Kinetics t_smooth']
-    cB_smooth = params['Kinetics cB_smooth']
-    cB_pss    = params['Kinetics cB_pss']
-    t_half    = params['t_half / s']
-    names     = params['Names']
-    t_min     = params['Plotting t_min']
-    t_max     = params['Plotting t_max']
+    """c_B(t) with mono-exponential fit, annotated with k, t1/2 and p1/2."""
+    times   = params['Kinetics times']
+    c_B     = params['Kinetics cB']
+    cB_pss  = params['Kinetics cB_pss']
+    t_half  = params['t_half / s']
+    nB      = params['Names'][1]
 
-    ax.scatter(times, c_B, color='C1', s=14, zorder=3, label=f'{names[1]} (data)')
-    ax.plot(t_smooth, cB_smooth, color='black', lw=1.5, zorder=2, label='mono-exp. fit')
+    ax.scatter(times, c_B, color='C1', s=14, zorder=3, label=f'{nB} (data)')
+    ax.plot(params['Kinetics t_smooth'], params['Kinetics cB_smooth'],
+            color='black', lw=1.5, zorder=2, label='mono-exp. fit')
 
-    # PSS asymptote and t1/2 markers
     ax.axhline(cB_pss, color='gray', ls=':', lw=1, zorder=1)
     if t_half <= times[-1]:
         cB_half = cB_pss - (cB_pss - c_B[0]) * 0.5
@@ -596,61 +492,38 @@ def plotting_kinetics_fit(params, ax):
 
     txt = (f"k = {params['k']:.2e} s$^{{-1}}$\n"
            f"$t_{{1/2}}$ = {t_half:.1f} s\n"
-           f"I($\\lambda$) = {params['I_lambda / mW']:.1f} mW\n"
+           f"P = {params['I_lambda / mW']:.1f} mW\n"
            f"$p_{{1/2}}$ = {params['p_half / mJ']:.1f} mJ")
     ax.text(0.97, 0.05, txt, transform=ax.transAxes, ha='right', va='bottom',
-            fontsize=9, bbox=dict(boxstyle='round', fc='white', ec='gray', alpha=0.85))
+            bbox=dict(boxstyle='round', fc='white', ec='gray', alpha=0.85))
 
     ax.set_xlabel('irradiation time / s')
     ax.set_ylabel('concentration / µM')
-    ax.set_title('Photoswitching kinetics')
-    if t_min != 0: ax.set_xlim(left=t_min)
-    if t_max != 0: ax.set_xlim(right=t_max)
+    if params['Plotting t_min'] != 0: ax.set_xlim(left=params['Plotting t_min'])
+    if params['Plotting t_max'] != 0: ax.set_xlim(right=params['Plotting t_max'])
     ax.legend(loc='center right')
 
 
-def save_individual_plot(plot_func, params, suffix):
-    fig, ax = plt.subplots(figsize=(8, 6))
-    plot_func(params, ax)
-    fig.tight_layout()
-    fig.savefig(os.path.join(params['Results Folder'], params['Basename'] + suffix + '.svg'),
-                bbox_inches='tight')
-    plt.close(fig)
-
-
-def plot_results(params, figure):
-    figure.clf()
-    has_spectra = params['Has spectra']
-    n_plots = 3 if has_spectra else 2
-    figure.set_size_inches(8 * n_plots, 6)   # each panel ~8x6 in the saved SVG
-    try:
-        figure.set_constrained_layout(True)
-    except Exception:
-        pass
-    axs = figure.subplots(1, n_plots)
-
-    if has_spectra:
-        plotting_spectra(params, axs[0])
-        plotting_conc_and_fit(params, axs[1])
-        plotting_kinetics_fit(params, axs[2])
-        save_individual_plot(plotting_spectra,      params, '_spectra')
-        save_individual_plot(plotting_conc_and_fit, params, '_conc_fit')
-        save_individual_plot(plotting_kinetics_fit, params, '_kinetics_fit')
-    else:
-        plotting_conc_and_fit(params, axs[0])
-        plotting_kinetics_fit(params, axs[1])
-        save_individual_plot(plotting_conc_and_fit, params, '_conc_fit')
-        save_individual_plot(plotting_kinetics_fit, params, '_kinetics_fit')
-
-    figure.savefig(os.path.join(params['Results Folder'], params['Basename'] + '_results.svg'),
-                   bbox_inches='tight')
-
-
 def get_plot_functions(params):
-    """Return the plotting functions to display, in order, for the current run."""
+    """Plotting functions to display, in order, for the current run."""
     if params['Has spectra']:
         return [plotting_spectra, plotting_conc_and_fit, plotting_kinetics_fit]
     return [plotting_conc_and_fit, plotting_kinetics_fit]
+
+
+def save_plots(params):
+    """Save each plot as an individual 8x6 SVG."""
+    suffixes = {plotting_spectra: '_spectra', plotting_conc_and_fit: '_conc_fit',
+                plotting_kinetics_fit: '_kinetics_fit'}
+    with plt.rc_context(SAVE_RC):
+        for func in get_plot_functions(params):
+            fig, ax = plt.subplots(figsize=(8, 6))
+            func(params, ax)
+            fig.tight_layout()
+            fig.savefig(os.path.join(params['Results Folder'],
+                                     params['Basename'] + suffixes[func] + '.svg'),
+                        bbox_inches='tight')
+            plt.close(fig)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -661,9 +534,9 @@ def run_gui():
     root = tk.Tk()
     root.title("QY Calculation")
     root.resizable(True, True)
-    root.geometry("1850x950")     # fits the 2x2 layout with equal-width plots
+    root.geometry("1850x950")
     root.minsize(1100, 700)
-    root.maxsize(3200, 2000)      # generous cap for 4K
+    root.maxsize(3200, 2000)
 
     root.grid_columnconfigure(0, weight=0, minsize=320)
     root.grid_columnconfigure(1, weight=1)
@@ -691,17 +564,16 @@ def run_gui():
     left.grid(row=0, column=0, sticky="nsew")
     left.grid_columnconfigure(0, weight=1)
 
-    # File selection
     file_frame = ttk.LabelFrame(left, text="Files", padding=8)
     file_frame.grid(row=0, column=0, sticky="ew", pady=(0,8))
     file_frame.grid_columnconfigure(0, weight=1)
 
-    var_kinetics    = tk.StringVar()
-    var_abs_coeff   = tk.StringVar()
-    var_results     = tk.StringVar()
+    var_kinetics  = tk.StringVar()
+    var_abs_coeff = tk.StringVar()
+    var_results   = tk.StringVar()
 
-    file_row(file_frame, "Kinetics DataFrame (CSV):",         var_kinetics,  0, "Open kinetics CSV")
-    file_row(file_frame, "Absorption coefficients (CSV):",    var_abs_coeff, 1, "Open absorption coefficients CSV")
+    file_row(file_frame, "Kinetics DataFrame (CSV):",      var_kinetics,  0, "Open kinetics CSV")
+    file_row(file_frame, "Absorption coefficients (CSV):", var_abs_coeff, 1, "Open absorption coefficients CSV")
 
     ttk.Label(file_frame, text="Results folder:").grid(row=4, column=0, sticky="w", pady=(6,0))
     f_res = ttk.Frame(file_frame)
@@ -715,43 +587,31 @@ def run_gui():
     param_frame.grid(row=1, column=0, sticky="ew", pady=(0,8))
     param_frame.grid_columnconfigure(1, weight=1)
 
-    var_led_select   = tk.StringVar(value='Custom (enter below)')
-    var_led_center   = tk.StringVar(value='325')
-    var_led_fwhm     = tk.StringVar(value='0')
-    var_wl_conc_min  = tk.StringVar(value='330')
-    var_wl_conc_max  = tk.StringVar(value='380')
-    var_voltage      = tk.StringVar(value='7.465')
-    var_volume       = tk.StringVar(value='3')
-    var_conc         = tk.StringVar(value='40')
-    var_channel      = tk.StringVar(value='low')
-    var_fit_dir      = tk.StringVar(value='forward + backward')
+    var_led_select  = tk.StringVar(value='Custom (enter below)')
+    var_led_center  = tk.StringVar(value='325')
+    var_led_fwhm    = tk.StringVar(value='0')
+    var_flux        = tk.StringVar(value='4.5e-9')
+    var_volume      = tk.StringVar(value='3')
+    var_wl_conc_min = tk.StringVar(value='330')
+    var_wl_conc_max = tk.StringVar(value='380')
+    var_conc        = tk.StringVar(value='40')
+    var_fit_dir     = tk.StringVar(value='forward + backward')
+    var_thermal     = tk.StringVar(value='none')
+    var_k_thermal   = tk.StringVar(value='0')
 
-    # Row 0: LED dropdown
     ttk.Label(param_frame, text="LED:").grid(row=0, column=0, sticky="w", pady=2, padx=(0,6))
     led_combo = ttk.Combobox(param_frame, textvariable=var_led_select,
-                             values=list(LED_CATALOGUE.keys()),
-                             state="readonly", width=36)
+                             values=list(LED_CATALOGUE.keys()), state="readonly", width=36)
     led_combo.grid(row=0, column=1, sticky="w", padx=4)
 
-    def on_led_select(event=None):
-        name = var_led_select.get()
-        center, fwhm = LED_CATALOGUE.get(name, (None, None))
-        if center is not None:
-            var_led_center.set(str(center))
-            var_led_fwhm.set(str(fwhm))
-        state = 'normal' if center is None else 'disabled'
-        led_center_entry.config(state=state)
-        led_fwhm_entry.config(state=state)
-    led_combo.bind('<<ComboboxSelected>>', on_led_select)
-
     param_entries = [
-        ("LED central wavelength / nm",          var_led_center),
-        ("LED FWHM / nm  (0 = monochromatic)",  var_led_fwhm),
-        ("Concentration WL min / nm",            var_wl_conc_min),
-        ("Concentration WL max / nm",            var_wl_conc_max),
-        ("Voltage after reference / V",          var_voltage),
-        ("Volume / mL",                          var_volume),
-        ("Concentration / µM",                   var_conc),
+        ("LED central wavelength / nm",                 var_led_center),
+        ("LED FWHM / nm  (0 = monochromatic)",         var_led_fwhm),
+        ("Photon flux / mol s⁻¹",           var_flux),
+        ("Volume / mL",                                 var_volume),
+        ("Concentration WL min / nm",                   var_wl_conc_min),
+        ("Concentration WL max / nm",                   var_wl_conc_max),
+        ("Concentration / µM  (single-λ only)",  var_conc),
     ]
     entry_widgets = {}
     for i, (lbl, var) in enumerate(param_entries):
@@ -762,14 +622,33 @@ def run_gui():
     led_center_entry = entry_widgets["LED central wavelength / nm"]
     led_fwhm_entry   = entry_widgets["LED FWHM / nm  (0 = monochromatic)"]
 
-    ttk.Label(param_frame, text="Channel:").grid(row=9, column=0, sticky="w", pady=2, padx=(0,6))
-    ttk.Combobox(param_frame, textvariable=var_channel, values=["low","high"],
-                 state="readonly", width=10).grid(row=9, column=1, sticky="w", padx=4)
+    def on_led_select(event=None):
+        center, fwhm = LED_CATALOGUE.get(var_led_select.get(), (None, None))
+        if center is not None:
+            var_led_center.set(str(center))
+            var_led_fwhm.set(str(fwhm))
+        state = 'normal' if center is None else 'disabled'
+        led_center_entry.config(state=state)
+        led_fwhm_entry.config(state=state)
+    led_combo.bind('<<ComboboxSelected>>', on_led_select)
 
-    ttk.Label(param_frame, text="Fit direction:").grid(row=10, column=0, sticky="w", pady=2, padx=(0,6))
+    r = len(param_entries) + 1
+    ttk.Label(param_frame, text="Photoreaction:").grid(row=r, column=0, sticky="w", pady=2, padx=(0,6))
     ttk.Combobox(param_frame, textvariable=var_fit_dir,
                  values=["forward + backward", "forward only"],
-                 state="readonly", width=18).grid(row=10, column=1, sticky="w", padx=4)
+                 state="readonly", width=18).grid(row=r, column=1, sticky="w", padx=4)
+
+    THERMAL_OPTIONS = {
+        'none':                               'none',
+        '2nd → 1st column (e.g. cis → trans)': 'B->A',
+        '1st → 2nd column':              'A->B',
+    }
+    ttk.Label(param_frame, text="Thermal relaxation:").grid(row=r+1, column=0, sticky="w", pady=2, padx=(0,6))
+    ttk.Combobox(param_frame, textvariable=var_thermal, values=list(THERMAL_OPTIONS),
+                 state="readonly", width=30).grid(row=r+1, column=1, sticky="w", padx=4)
+    ttk.Label(param_frame, text="Thermal k / s⁻¹  (= ln2 / t½):").grid(
+        row=r+2, column=0, sticky="w", pady=2, padx=(0,6))
+    ttk.Entry(param_frame, textvariable=var_k_thermal, width=12).grid(row=r+2, column=1, sticky="w", padx=4)
 
     # Plotting parameters
     plot_frame = ttk.LabelFrame(left, text="Plot Parameters", padding=8)
@@ -785,33 +664,27 @@ def run_gui():
     var_t_max   = tk.StringVar(value='0')
 
     plot_entries = [
-        ("Color palette",  var_palette),
-        ("A min",          var_A_min),
-        ("A max",          var_A_max),
-        ("λ min / nm",     var_wl_min),
-        ("λ max / nm",     var_wl_max),
-        ("t min / s",      var_t_min),
-        ("t max / s",      var_t_max),
+        ("Color palette", var_palette), ("A min", var_A_min), ("A max", var_A_max),
+        ("λ min / nm", var_wl_min), ("λ max / nm", var_wl_max),
+        ("t min / s", var_t_min), ("t max / s", var_t_max),
     ]
     for i, (lbl, var) in enumerate(plot_entries):
         ttk.Label(plot_frame, text=lbl + ":").grid(row=i, column=0, sticky="w", pady=2, padx=(0,6))
         ttk.Entry(plot_frame, textvariable=var, width=12).grid(row=i, column=1, sticky="w", padx=4)
 
-    # Run button
     run_btn = ttk.Button(left, text="Run Analysis")
     run_btn.grid(row=3, column=0, sticky="ew", pady=(4,0), ipady=4)
 
     # ── Right panel ──────────────────────────────────────────────────────────
-    # Layout (2 columns):
-    #   [ Output text     ] [ top-right plot  (spectra) ]
-    #   [ bottom-left plot ] [ bottom-right plot         ]
+    #   [ Output text      ] [ top-right plot    ]
+    #   [ bottom-left plot ] [ bottom-right plot ]
     right = ttk.Frame(root, padding=10)
     right.grid(row=0, column=1, sticky="nsew")
     right.grid_columnconfigure(0, weight=1, minsize=660)
     right.grid_columnconfigure(1, weight=1, minsize=660)
-    right.grid_rowconfigure(1, weight=0)   # top row (output + first plot): natural height
-    right.grid_rowconfigure(3, weight=0)   # bottom row (two plots): natural height
-    right.grid_rowconfigure(4, weight=1)   # spacer absorbs any extra vertical space
+    right.grid_rowconfigure(1, weight=0)
+    right.grid_rowconfigure(3, weight=0)
+    right.grid_rowconfigure(4, weight=1)
 
     ttk.Label(right, text="Output", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w")
     ttk.Label(right, text="Plots",  font=("TkDefaultFont", 10, "bold")).grid(row=0, column=1, sticky="w")
@@ -826,46 +699,31 @@ def run_gui():
     out_scroll.grid(row=0, column=1, sticky="ns")
     output_box.config(yscrollcommand=out_scroll.set)
 
-    # Fixed slots for the plots. Plots are assigned in order:
-    #   plot 0 -> top-right (next to output), plot 1 -> bottom-left, plot 2 -> bottom-right
-    slot_topright = ttk.Frame(right)
-    slot_topright.grid(row=1, column=1, sticky="n", pady=(4,10))
-    slot_botleft  = ttk.Frame(right)
-    slot_botleft.grid(row=3, column=0, sticky="n", padx=(0,10))
-    slot_botright = ttk.Frame(right)
-    slot_botright.grid(row=3, column=1, sticky="n")
+    slot_topright = ttk.Frame(right); slot_topright.grid(row=1, column=1, sticky="n", pady=(4,10))
+    slot_botleft  = ttk.Frame(right); slot_botleft.grid(row=3, column=0, sticky="n", padx=(0,10))
+    slot_botright = ttk.Frame(right); slot_botright.grid(row=3, column=1, sticky="n")
     plot_slots = [slot_topright, slot_botleft, slot_botright]
 
-    # All plots share the same box size so the columns line up.
-    PLOT_FIGSIZE = (6.5, 4.1)   # inches; dpi=100 -> 650 x 410 px
-
-    # Holds the live FigureCanvasTkAgg widgets so we can clear them between runs
+    PLOT_FIGSIZE = (6.5, 4.1)
     plot_canvases = []
 
     def _draw_placeholder(slot):
-        """Blank white box that reserves the plot's space before the first run,
-        so the output box doesn't resize when plots appear."""
         f = plt.Figure(figsize=PLOT_FIGSIZE, dpi=100)
-        f.patch.set_facecolor('white')
-        ax = f.add_subplot(111)
-        ax.axis('off')
+        f.add_subplot(111).axis('off')
         fc = FigureCanvasTkAgg(f, master=slot)
         fc.draw()
         fc.get_tk_widget().pack()
         return fc
 
-    # Reserve plot space immediately on launch
     for _slot in plot_slots:
         plot_canvases.append(_draw_placeholder(_slot))
 
     def _float(s):
-        """Parse float accepting both '.' and ',' as decimal separator."""
         return float(str(s).replace(',', '.'))
 
     # ── Run callback ─────────────────────────────────────────────────────────
     def run():
         output_box.delete("1.0", tk.END)
-        # Clear any previously drawn plots
         for c in plot_canvases:
             c.get_tk_widget().destroy()
         plot_canvases.clear()
@@ -875,11 +733,9 @@ def run_gui():
             output_box.see(tk.END)
             root.update_idletasks()
 
-        # Validate files
         kin_file    = var_kinetics.get().strip()
         coeff_file  = var_abs_coeff.get().strip()
         results_dir = var_results.get().strip()
-
         if not kin_file or not os.path.isfile(kin_file):
             messagebox.showerror("Missing file", "Please select a valid kinetics DataFrame CSV.")
             return
@@ -890,61 +746,53 @@ def run_gui():
             messagebox.showerror("Missing folder", "Please select a valid results folder.")
             return
 
-        # Load kinetics df and detect whether it has spectra (>1 row)
-        df_kinetics = pd.read_csv(kin_file)
-        df_kinetics = df_kinetics.dropna(axis=1)   # drop time columns that contain any NaN
+        df_kinetics = pd.read_csv(kin_file).dropna(axis=1)
         has_spectra = df_kinetics.shape[0] > 1
-        basename    = os.path.splitext(os.path.basename(kin_file))[0]
 
-        params = {
-            'Print function':       printer,
-            'Kinetics df':          df_kinetics,
-            'Has spectra':          has_spectra,
-            'Abs coeff file':       coeff_file,
-            'Results Folder':       results_dir,
-            'Basename':             basename,
-            'Irradiation wavelength':  _float(var_led_center.get()),
-            'LED name':                var_led_select.get(),
-            'LED central wavelength':  _float(var_led_center.get()),
-            'LED FWHM':                _float(var_led_fwhm.get()),
-            'Concentration WL min':      _float(var_wl_conc_min.get()),
-            'Concentration WL max':      _float(var_wl_conc_max.get()),
-            'Voltage after ref':    _float(var_voltage.get()),
-            'Volume':               _float(var_volume.get()),
-            'Concentration':        _float(var_conc.get()) * 1e-6,
-            'Channel':              var_channel.get(),
-            'Fit direction':        ('forward_only' if var_fit_dir.get() == 'forward only'
-                                     else 'both'),
-            'Color palette':        var_palette.get(),
-            'Plotting A_min':       _float(var_A_min.get()),
-            'Plotting A_max':       _float(var_A_max.get()),
-            'Plotting wl_min':      _float(var_wl_min.get()),
-            'Plotting wl_max':      _float(var_wl_max.get()),
-            'Plotting t_min':       _float(var_t_min.get()),
-            'Plotting t_max':       _float(var_t_max.get()),
-        }
+        try:
+            params = {
+                'Print function':         printer,
+                'Kinetics df':            df_kinetics,
+                'Has spectra':            has_spectra,
+                'Abs coeff file':         coeff_file,
+                'Results Folder':         results_dir,
+                'Basename':               os.path.splitext(os.path.basename(kin_file))[0],
+                'LED name':               var_led_select.get(),
+                'Irradiation wavelength': _float(var_led_center.get()),
+                'LED FWHM':               _float(var_led_fwhm.get()),
+                'Photon flux':            _float(var_flux.get()),
+                'Volume':                 _float(var_volume.get()),
+                'Concentration WL min':   _float(var_wl_conc_min.get()),
+                'Concentration WL max':   _float(var_wl_conc_max.get()),
+                'Concentration':          _float(var_conc.get()) * 1e-6,
+                'Fit direction':          ('forward_only' if var_fit_dir.get() == 'forward only'
+                                           else 'both'),
+                'Thermal relaxation':     THERMAL_OPTIONS[var_thermal.get()],
+                'Thermal k':              _float(var_k_thermal.get()),
+                'Color palette':          var_palette.get(),
+                'Plotting A_min':         _float(var_A_min.get()),
+                'Plotting A_max':         _float(var_A_max.get()),
+                'Plotting wl_min':        _float(var_wl_min.get()),
+                'Plotting wl_max':        _float(var_wl_max.get()),
+                'Plotting t_min':         _float(var_t_min.get()),
+                'Plotting t_max':         _float(var_t_max.get()),
+            }
+        except ValueError as e:
+            messagebox.showerror("Input error", f"Invalid number: {e}")
+            return
 
         printer(f"Kinetics df: {df_kinetics.shape[0]} row(s) × {df_kinetics.shape[1]} columns "
                 f"({'spectra series' if has_spectra else 'single-wavelength kinetics'})")
 
         try:
             run_analysis(params)
-            # Save the combined SVG + individual SVGs to disk (unchanged)
-            save_fig = plt.Figure()
-            plot_results(params, save_fig)
-            plt.close(save_fig)
-
-            # Render each plot into its fixed slot:
-            #   plot 0 (spectra) -> top-right, next to the output
-            #   plots 1,2 -> bottom row
-            plot_funcs = get_plot_functions(params)
-            for i, plot_func in enumerate(plot_funcs):
+            save_plots(params)
+            for i, plot_func in enumerate(get_plot_functions(params)):
                 f  = plt.Figure(figsize=PLOT_FIGSIZE, dpi=100)
                 ax = f.add_subplot(111)
                 plot_func(params, ax)
                 f.tight_layout()
-                slot = plot_slots[i]
-                fc = FigureCanvasTkAgg(f, master=slot)
+                fc = FigureCanvasTkAgg(f, master=plot_slots[i])
                 fc.draw()
                 fc.get_tk_widget().pack()
                 plot_canvases.append(fc)
@@ -966,9 +814,4 @@ def run_gui():
 
 
 if __name__ == "__main__":
-    import tkinter as _tk_check
-    try:
-        _tk_check.Tk().destroy()
-    except Exception as _e:
-        print(f"Warning: could not initialise Tk ({_e}). Try restarting the Python kernel.")
     run_gui()
