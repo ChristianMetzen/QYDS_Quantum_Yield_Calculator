@@ -6,40 +6,59 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
+import csv
 
-def read_in_UV_Vis_csv(file=None):
-    
-    if file:
-        # Read file
-        df = pd.read_csv(file, skip_blank_lines=False)
-        
-        # Find first empty row
-        empty_row_mask = df.replace("", np.nan).isna().all(axis=1)
+def read_in_UV_Vis_csv(file):
+    """Read a Cary UV-Vis csv, raw or cleaned by 00_UVVis_csv_changer.
 
-        if empty_row_mask.any():
+    Layout: row 0 = spectrum names (every 2nd column), row 1 = 'Wavelength (nm),Abs',
+    then data as x/y column pairs, optionally followed by an empty line and the
+    instrument metadata. Works for spectra and for kinetics files (x = time).
+    Returns a DataFrame: column 0 = x of the first spectrum, then one column per spectrum.
+    """
+    with open(file, 'rb') as f:
+        text = f.read().decode('utf-8', errors='replace')
+    text = text.replace('\r\r\n', '\n').replace('\r\n', '\n').replace('\r', '\n')
 
-            # Get the index of the first True value (first empty row)
-            last_row_with_data = empty_row_mask[empty_row_mask].index[0]
+    def is_num(s):
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
 
-            # Slice only the data rows (skip header row 0, stop before empty row)
-            df = df.iloc[1:last_row_with_data]
+    header, data = [], []
+    for row in csv.reader(text.split('\n')):
+        if not any(c.strip() for c in row):     # empty or ',,,' line
+            if data:
+                break                            # metadata block starts
+            continue
+        if row and is_num(row[0].strip()):
+            data.append(row)
+        elif data:
+            break
         else:
-            df = df.iloc[1:]
+            header.append(row)
+    if not data:
+        raise ValueError(f"No numeric data found in {os.path.basename(file)}")
 
-        # Shift the column names one to the right
-        new_column_names = [None] + list(df.columns[:-1])
-        df.columns = new_column_names
+    n_cols = max(len(r) for r in data)
+    arr = np.full((len(data), n_cols), np.nan)
+    for i, r in enumerate(data):
+        for j, c in enumerate(r):
+            if c.strip() and is_num(c.strip()):
+                arr[i, j] = float(c)
 
-        # Delete all wavelenth column except first
-        columns_to_delete = [i for i in range(1, len(df.columns)) if i % 2 == 0]
-        df = df.drop(columns=df.columns[columns_to_delete])
-        df = df.astype(float)
-        
-        return df
-    
-    else:
+    y_idx = [j for j in range(1, n_cols, 2) if not np.all(np.isnan(arr[:, j]))]
+    names = []
+    for j in y_idx:
+        name = header[0][j - 1].strip() if header and len(header[0]) > j - 1 else ''
+        names.append(name or f'spectrum {len(names) + 1}')
+    names = [f'{n} ({i})' if names.count(n) > 1 else n for i, n in enumerate(names)]
 
-        return
+    df = pd.DataFrame(arr[:, y_idx], columns=names)
+    df.insert(0, 'x', arr[:, 0])
+    return df.dropna(subset=['x']).reset_index(drop=True)
 
 
 def calculate_absorptin_coefficients(dataframe_teq = None,
@@ -54,7 +73,10 @@ def calculate_absorptin_coefficients(dataframe_teq = None,
     x_PSS = ratio_PSS
     d = 1
     A_teq = dataframe_teq.iloc[:,1].to_numpy()
-    A_PSS = dataframe_PSS.iloc[:,1].to_numpy()
+    # PSS spectrum on the wavelength grid of the teq spectrum
+    pss   = dataframe_PSS.sort_values(dataframe_PSS.columns[0])
+    A_PSS = np.interp(dataframe_teq.iloc[:,0].to_numpy(),
+                      pss.iloc[:,0].to_numpy(), pss.iloc[:,1].to_numpy())
 
     # Normalize absorbances
 
